@@ -5,13 +5,20 @@ import android.util.Base64;
 import android.util.Log;
 
 import org.json.JSONException;
+import org.json.JSONArray;
 import org.json.JSONObject;
+
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.util.HashMap;
+import java.util.Map;
 
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.Response;
 import okhttp3.WebSocket;
 import okhttp3.WebSocketListener;
+import okio.ByteString;
 
 final class WebSocketTransport {
     interface Listener {
@@ -29,6 +36,9 @@ final class WebSocketTransport {
     }
 
     private static final int NORMAL_CLOSE = 1000;
+    private static final int VIDEO_PACKET_TYPE = 1;
+    private static final int FORMAT_JPEG = 1;
+    private static final int VIDEO_PACKET_HEADER_BYTES = 33;
 
     private final OkHttpClient okHttpClient;
     private final String serverUrl;
@@ -41,6 +51,8 @@ final class WebSocketTransport {
     private WebSocket webSocket;
     private boolean closed;
     private boolean joined;
+    private int cUuid;
+    private final Map<Integer, String> participantIdsByCUuid = new HashMap<>();
 
     WebSocketTransport(
             OkHttpClient okHttpClient,
@@ -74,6 +86,11 @@ final class WebSocketTransport {
             @Override
             public void onMessage(WebSocket webSocket, String text) {
                 handleMessage(text);
+            }
+
+            @Override
+            public void onMessage(WebSocket webSocket, ByteString bytes) {
+                handleBinaryMessage(bytes);
             }
 
             @Override
@@ -132,22 +149,25 @@ final class WebSocketTransport {
         if (webSocket == null || closed || !joined || jpegData == null || jpegData.length == 0) {
             return;
         }
-        try {
-            sendJson(new JSONObject()
-                    .put("type", "client.media.video")
-                    .put("callId", callId)
-                    .put("userId", userId)
-                    .put("timestampMs", timestampMs)
-                    .put("format", "jpeg")
-                    .put("width", width)
-                    .put("height", height)
-                    .put("frameRateFps", frameRateFps)
-                    .put("bitrateKbps", bitrateKbps)
-                    .put("sequence", sequence)
-                    .put("data", Base64.encodeToString(jpegData, Base64.NO_WRAP)));
-        } catch (JSONException error) {
-            Log.d(SdkConstants.TAG, "Unable to build video frame message. callId=" + callId);
+        if (cUuid == 0) {
+            Log.d(SdkConstants.TAG, "Skipping binary video frame before c_uuid assignment. callId=" + callId);
+            return;
         }
+        ByteBuffer packet = ByteBuffer
+                .allocate(VIDEO_PACKET_HEADER_BYTES + jpegData.length)
+                .order(ByteOrder.BIG_ENDIAN);
+        packet.putShort((short) VIDEO_PACKET_TYPE);
+        packet.putInt(cUuid);
+        packet.putLong(timestampMs);
+        packet.put((byte) FORMAT_JPEG);
+        packet.putShort((short) clampUnsignedShort(width));
+        packet.putShort((short) clampUnsignedShort(height));
+        packet.putShort((short) clampUnsignedShort(frameRateFps));
+        packet.putInt(Math.max(0, bitrateKbps));
+        packet.putInt((int) sequence);
+        packet.putInt(jpegData.length);
+        packet.put(jpegData);
+        webSocket.send(ByteString.of(packet.array()));
     }
 
     void sendMediaState(boolean microphoneMuted, boolean cameraEnabled) {
@@ -213,6 +233,11 @@ final class WebSocketTransport {
             String type = message.optString("type");
             if ("server.joined".equals(type)) {
                 joined = true;
+                cUuid = message.optInt("cUuid", 0);
+                if (cUuid != 0) {
+                    participantIdsByCUuid.put(cUuid, userId);
+                }
+                rememberParticipantMappings(message.optJSONArray("participants"));
                 Log.d(SdkConstants.TAG, "Server joined confirmed. callId=" + callId);
                 if (listener != null) {
                     listener.onJoined();
@@ -226,9 +251,14 @@ final class WebSocketTransport {
                 String participantId = message.optJSONObject("participant") == null
                         ? null
                         : message.optJSONObject("participant").optString("userId", null);
-                if (!TextUtils.isEmpty(participantId) && listener != null) {
-                    listener.onRemoteParticipantLeft(participantId);
+                if (!TextUtils.isEmpty(participantId)) {
+                    removeParticipantMapping(participantId);
+                    if (listener != null) {
+                        listener.onRemoteParticipantLeft(participantId);
+                    }
                 }
+            } else if ("server.participant_joined".equals(type)) {
+                rememberParticipantMapping(message.optJSONObject("participant"));
             } else if ("server.media_state".equals(type)) {
                 handleRemoteMediaState(message);
             } else if ("server.media.video".equals(type)) {
@@ -248,6 +278,71 @@ final class WebSocketTransport {
                         "Invalid message from webStream server.",
                         error));
             }
+        }
+    }
+
+    private void handleBinaryMessage(ByteString bytes) {
+        if (bytes == null || bytes.size() < VIDEO_PACKET_HEADER_BYTES) {
+            return;
+        }
+        ByteBuffer packet = ByteBuffer.wrap(bytes.toByteArray()).order(ByteOrder.BIG_ENDIAN);
+        while (packet.remaining() >= VIDEO_PACKET_HEADER_BYTES) {
+            int type = Short.toUnsignedInt(packet.getShort());
+            int frameCUuid = packet.getInt();
+            long timestampMs = packet.getLong();
+            int format = Byte.toUnsignedInt(packet.get());
+            int width = Short.toUnsignedInt(packet.getShort());
+            int height = Short.toUnsignedInt(packet.getShort());
+            int frameRateFps = Short.toUnsignedInt(packet.getShort());
+            int bitrateKbps = packet.getInt();
+            long sequence = Integer.toUnsignedLong(packet.getInt());
+            int payloadLength = packet.getInt();
+
+            if (type != VIDEO_PACKET_TYPE || format != FORMAT_JPEG || payloadLength <= 0
+                    || payloadLength > packet.remaining()) {
+                Log.d(SdkConstants.TAG, "Invalid binary video packet. callId=" + callId);
+                return;
+            }
+
+            byte[] jpegData = new byte[payloadLength];
+            packet.get(jpegData);
+            handleRemoteBinaryVideoFrame(
+                    frameCUuid,
+                    jpegData,
+                    width,
+                    height,
+                    frameRateFps,
+                    bitrateKbps,
+                    timestampMs,
+                    sequence);
+        }
+    }
+
+    private void handleRemoteBinaryVideoFrame(
+            int frameCUuid,
+            byte[] jpegData,
+            int width,
+            int height,
+            int frameRateFps,
+            int bitrateKbps,
+            long timestampMs,
+            long sequence) {
+        if (frameCUuid == cUuid) {
+            return;
+        }
+        String participantId = participantIdsByCUuid.get(frameCUuid);
+        if (TextUtils.isEmpty(participantId)) {
+            Log.d(SdkConstants.TAG, "Unknown binary video sender. c_uuid=" + frameCUuid);
+            return;
+        }
+        if (listener != null) {
+            listener.onRemoteVideoFrame(new RemoteVideoFrame(
+                    participantId,
+                    jpegData,
+                    width,
+                    height,
+                    timestampMs,
+                    sequence));
         }
     }
 
@@ -287,5 +382,45 @@ final class WebSocketTransport {
                     message.optLong("timestampMs", 0L),
                     message.optLong("sequence", 0L)));
         }
+    }
+
+    private void rememberParticipantMappings(JSONArray participants) {
+        if (participants == null) {
+            return;
+        }
+        for (int i = 0; i < participants.length(); i++) {
+            rememberParticipantMapping(participants.optJSONObject(i));
+        }
+    }
+
+    private void rememberParticipantMapping(JSONObject participant) {
+        if (participant == null) {
+            return;
+        }
+        String participantId = participant.optString("userId", null);
+        int participantCUuid = participant.optInt("cUuid", 0);
+        if (!TextUtils.isEmpty(participantId) && participantCUuid != 0) {
+            participantIdsByCUuid.put(participantCUuid, participantId);
+        }
+    }
+
+    private void removeParticipantMapping(String participantId) {
+        Integer cUuidToRemove = null;
+        for (Map.Entry<Integer, String> entry : participantIdsByCUuid.entrySet()) {
+            if (participantId.equals(entry.getValue())) {
+                cUuidToRemove = entry.getKey();
+                break;
+            }
+        }
+        if (cUuidToRemove != null) {
+            participantIdsByCUuid.remove(cUuidToRemove);
+        }
+    }
+
+    private int clampUnsignedShort(int value) {
+        if (value < 0) {
+            return 0;
+        }
+        return Math.min(value, 0xffff);
     }
 }

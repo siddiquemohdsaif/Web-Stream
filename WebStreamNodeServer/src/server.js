@@ -1,8 +1,12 @@
+const crypto = require('crypto');
 const WebSocket = require('ws');
 
 const port = Number(process.env.PORT || 8080);
 const wss = new WebSocket.Server({ port, host: '0.0.0.0' });
 const calls = new Map();
+const VIDEO_PACKET_TYPE = 1;
+const FORMAT_JPEG = 1;
+const VIDEO_PACKET_HEADER_BYTES = 33;
 
 function send(ws, message) {
   if (ws.readyState === WebSocket.OPEN) {
@@ -20,10 +24,28 @@ function getCallParticipants(callId) {
 function publicParticipant(ws) {
   return {
     userId: ws.webStreamUserId,
+    cUuid: ws.webStreamCUuid,
     displayName: ws.webStreamDisplayName || null,
     microphoneMuted: Boolean(ws.webStreamMicrophoneMuted),
     cameraEnabled: ws.webStreamCameraEnabled !== false,
   };
+}
+
+function generateCUuid(callId, userId, participants) {
+  const hash = crypto.createHash('sha256').update(`${callId}:${userId}`).digest();
+  let cUuid = hash.readUInt32BE(0) & 0x7fffffff;
+  if (cUuid === 0) {
+    cUuid = 1;
+  }
+
+  const used = new Set(Array.from(participants).map((participant) => participant.webStreamCUuid));
+  while (used.has(cUuid)) {
+    cUuid += 1;
+    if (cUuid > 0x7fffffff) {
+      cUuid = 1;
+    }
+  }
+  return cUuid;
 }
 
 function leaveCall(ws, notifyClient) {
@@ -56,6 +78,7 @@ function leaveCall(ws, notifyClient) {
   }
 
   ws.webStreamCallId = null;
+  ws.webStreamCUuid = null;
 }
 
 function handleJoin(ws, message) {
@@ -71,25 +94,29 @@ function handleJoin(ws, message) {
     return;
   }
 
+  const participants = getCallParticipants(callId);
   leaveCall(ws, false);
+  const activeParticipants = getCallParticipants(callId);
+
   ws.webStreamCallId = callId;
   ws.webStreamUserId = userId;
+  ws.webStreamCUuid = generateCUuid(callId, userId, activeParticipants);
   ws.webStreamDisplayName = String(message.displayName || '').trim();
   ws.webStreamMicrophoneMuted = false;
   ws.webStreamCameraEnabled = true;
 
-  const participants = getCallParticipants(callId);
   const existingParticipants = Array.from(participants).map(publicParticipant);
-  participants.add(ws);
+  activeParticipants.add(ws);
 
   send(ws, {
     type: 'server.joined',
     callId,
     userId,
+    cUuid: ws.webStreamCUuid,
     participants: existingParticipants,
   });
 
-  for (const peer of participants) {
+  for (const peer of activeParticipants) {
     if (peer === ws) {
       continue;
     }
@@ -98,6 +125,68 @@ function handleJoin(ws, message) {
       callId,
       participant: publicParticipant(ws),
     });
+  }
+}
+
+function isValidBinaryVideoPacket(ws, packet) {
+  if (!packet || packet.length < VIDEO_PACKET_HEADER_BYTES) {
+    return false;
+  }
+
+  let offset = 0;
+  while (offset < packet.length) {
+    if (packet.length - offset < VIDEO_PACKET_HEADER_BYTES) {
+      return false;
+    }
+
+    const type = packet.readUInt16BE(offset);
+    const cUuid = packet.readUInt32BE(offset + 2);
+    const format = packet.readUInt8(offset + 14);
+    const payloadLength = packet.readUInt32BE(offset + 29);
+    const nextOffset = offset + VIDEO_PACKET_HEADER_BYTES + payloadLength;
+
+    if (
+      type !== VIDEO_PACKET_TYPE ||
+      cUuid !== ws.webStreamCUuid ||
+      format !== FORMAT_JPEG ||
+      payloadLength === 0 ||
+      nextOffset > packet.length
+    ) {
+      return false;
+    }
+
+    offset = nextOffset;
+  }
+
+  return offset === packet.length;
+}
+
+function relayBinaryVideoFrame(ws, packet) {
+  const callId = ws.webStreamCallId;
+  const userId = ws.webStreamUserId;
+
+  if (!callId || !userId || !calls.has(callId)) {
+    send(ws, {
+      type: 'server.error',
+      code: 'NOT_IN_CALL',
+      message: 'Join a call before sending video.',
+    });
+    return;
+  }
+
+  if (!isValidBinaryVideoPacket(ws, packet)) {
+    send(ws, {
+      type: 'server.error',
+      code: 'INVALID_BINARY_VIDEO',
+      message: 'Binary video packet is invalid.',
+    });
+    return;
+  }
+
+  for (const peer of calls.get(callId)) {
+    if (peer !== ws && peer.readyState === WebSocket.OPEN) {
+      peer.send(packet, { binary: true });
+    }
   }
 }
 
@@ -171,7 +260,12 @@ function relayVideoFrame(ws, message) {
 }
 
 wss.on('connection', (ws) => {
-  ws.on('message', (data) => {
+  ws.on('message', (data, isBinary) => {
+    if (isBinary) {
+      relayBinaryVideoFrame(ws, Buffer.isBuffer(data) ? data : Buffer.from(data));
+      return;
+    }
+
     let message;
     try {
       message = JSON.parse(data.toString());
