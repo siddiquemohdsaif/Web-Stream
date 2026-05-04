@@ -46,8 +46,8 @@ final class RemoteWebStreamVideoTrack implements WebStreamVideoTrack {
         detach(attachedView);
         attachedView = view;
         imageView = new ImageView(view.getContext());
-//        imageView.setScaleType(ImageView.ScaleType.CENTER_CROP);
-//        imageView.setAdjustViewBounds(false);
+        imageView.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        imageView.setAdjustViewBounds(false);
         imageView.setBackgroundColor(0xFF050606);
         view.addView(imageView, new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,

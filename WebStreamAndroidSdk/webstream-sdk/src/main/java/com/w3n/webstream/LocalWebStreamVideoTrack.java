@@ -4,6 +4,10 @@ import android.Manifest;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Matrix;
+import android.graphics.Rect;
+import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
@@ -13,10 +17,12 @@ import android.hardware.camera2.CameraManager;
 import android.hardware.camera2.CaptureRequest;
 import android.os.Handler;
 import android.os.HandlerThread;
+import android.os.Looper;
 import android.util.Log;
 import android.view.Surface;
 import android.view.TextureView;
 import android.view.ViewGroup;
+import android.widget.ImageView;
 
 import java.io.ByteArrayOutputStream;
 import java.util.Collections;
@@ -33,9 +39,12 @@ final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
     private final String participantId;
     private final WebStreamCallOptions options;
     private final Runnable relayFrameRunnable = this::captureRelayFrame;
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     private WebStreamVideoView attachedView;
     private TextureView textureView;
+    private ImageView localPreviewImageView;
+    private Bitmap latestLocalPreviewBitmap;
     private HandlerThread cameraThread;
     private Handler cameraHandler;
     private HandlerThread frameThread;
@@ -78,10 +87,21 @@ final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
         attachedView = view;
         textureView = new TextureView(view.getContext());
         textureView.setSurfaceTextureListener(surfaceTextureListener);
+        textureView.addOnLayoutChangeListener((changedView, left, top, right, bottom,
+                oldLeft, oldTop, oldRight, oldBottom) ->
+                updateTextureTransform(right - left, bottom - top));
         view.addView(textureView, new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT));
+        localPreviewImageView = new ImageView(view.getContext());
+        localPreviewImageView.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        localPreviewImageView.setAdjustViewBounds(false);
+        localPreviewImageView.setBackgroundColor(0xFF050606);
+        view.addView(localPreviewImageView, new ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
         if (textureView.isAvailable()) {
+            updateTextureTransform(textureView.getWidth(), textureView.getHeight());
             startCamera(textureView.getSurfaceTexture());
         }
         startFrameRelay();
@@ -100,6 +120,12 @@ final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
             textureView.setSurfaceTextureListener(null);
             textureView = null;
         }
+        if (localPreviewImageView != null) {
+            view.removeView(localPreviewImageView);
+            localPreviewImageView.setImageBitmap(null);
+            localPreviewImageView = null;
+        }
+        recycleLatestLocalPreviewBitmap();
         attachedView = null;
     }
 
@@ -109,6 +135,10 @@ final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
         if (!enabled) {
             stopFrameRelay();
             stopCamera();
+            if (localPreviewImageView != null) {
+                localPreviewImageView.setImageBitmap(null);
+            }
+            recycleLatestLocalPreviewBitmap();
             return;
         }
         if (textureView != null && textureView.isAvailable()) {
@@ -143,12 +173,14 @@ final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
             new TextureView.SurfaceTextureListener() {
                 @Override
                 public void onSurfaceTextureAvailable(SurfaceTexture surface, int width, int height) {
+                    updateTextureTransform(width, height);
                     startCamera(surface);
                     startFrameRelay();
                 }
 
                 @Override
                 public void onSurfaceTextureSizeChanged(SurfaceTexture surface, int width, int height) {
+                    updateTextureTransform(width, height);
                 }
 
                 @Override
@@ -188,6 +220,23 @@ final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
         } catch (CameraAccessException | SecurityException ignored) {
             stopCamera();
         }
+    }
+
+    private void updateTextureTransform(int viewWidth, int viewHeight) {
+        if (textureView == null || viewWidth <= 0 || viewHeight <= 0) {
+            return;
+        }
+
+        Matrix matrix = new Matrix();
+        float viewCenterX = viewWidth * 0.5f;
+        float viewCenterY = viewHeight * 0.5f;
+        float scale = Math.max(
+                viewWidth / (float) PREVIEW_WIDTH,
+                viewHeight / (float) PREVIEW_HEIGHT);
+        float scaleX = PREVIEW_WIDTH * scale / viewWidth;
+        float scaleY = PREVIEW_HEIGHT * scale / viewHeight;
+        matrix.setScale(scaleX, scaleY, viewCenterX, viewCenterY);
+        textureView.setTransform(matrix);
     }
 
     private CameraDevice.StateCallback cameraStateCallback(SurfaceTexture surfaceTexture) {
@@ -321,11 +370,18 @@ final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
             return;
         }
         if (textureView.isAvailable() && frameHandler != null && frameListener != null) {
-            Bitmap bitmap = textureView.getBitmap(options.getVideoWidth(), options.getVideoHeight());
+            Bitmap bitmap = getAspectPreservingTextureBitmap(
+                    options.getVideoWidth(),
+                    options.getVideoHeight());
             if (bitmap != null) {
                 long timestampMs = System.currentTimeMillis();
                 long sequence = ++frameSequence;
-                frameHandler.post(() -> encodeAndDispatchFrame(bitmap, timestampMs, sequence));
+                frameHandler.post(() -> encodeAndDispatchFrame(
+                        bitmap,
+                        options.getVideoWidth(),
+                        options.getVideoHeight(),
+                        timestampMs,
+                        sequence));
             }
         }
         if (textureView != null) {
@@ -333,22 +389,122 @@ final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
         }
     }
 
-    private void encodeAndDispatchFrame(Bitmap bitmap, long timestampMs, long sequence) {
+    private Bitmap getAspectPreservingTextureBitmap(int outputWidth, int outputHeight) {
+        int viewWidth = textureView.getWidth();
+        int viewHeight = textureView.getHeight();
+        if (viewWidth <= 0 || viewHeight <= 0 || outputWidth <= 0 || outputHeight <= 0) {
+            return textureView.getBitmap();
+        }
+
+        float viewAspect = viewWidth / (float) viewHeight;
+        float outputAspect = outputWidth / (float) outputHeight;
+        int bitmapWidth;
+        int bitmapHeight;
+
+        if (viewAspect > outputAspect) {
+            bitmapHeight = outputHeight;
+            bitmapWidth = Math.round(bitmapHeight * viewAspect);
+        } else {
+            bitmapWidth = outputWidth;
+            bitmapHeight = Math.round(bitmapWidth / viewAspect);
+        }
+
+        return textureView.getBitmap(bitmapWidth, bitmapHeight);
+    }
+
+    private void encodeAndDispatchFrame(
+            Bitmap bitmap,
+            int outputWidth,
+            int outputHeight,
+            long timestampMs,
+            long sequence) {
+        Bitmap encodedBitmap = centerCropScale(bitmap, outputWidth, outputHeight);
         try {
             ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-            bitmap.compress(Bitmap.CompressFormat.JPEG, options.getJpegQuality(), outputStream);
+            encodedBitmap.compress(Bitmap.CompressFormat.JPEG, options.getJpegQuality(), outputStream);
+            updateLocalPreview(encodedBitmap);
             FrameListener listener = frameListener;
             if (listener != null && !released && enabled) {
                 listener.onFrame(
                         outputStream.toByteArray(),
-                        bitmap.getWidth(),
-                        bitmap.getHeight(),
+                        encodedBitmap.getWidth(),
+                        encodedBitmap.getHeight(),
                         timestampMs,
                         sequence);
             }
         } finally {
+            if (encodedBitmap != bitmap) {
+                encodedBitmap.recycle();
+            }
             bitmap.recycle();
         }
+    }
+
+    private void updateLocalPreview(Bitmap bitmap) {
+        if (bitmap == null || released || !enabled) {
+            return;
+        }
+
+        Bitmap previewBitmap = bitmap.copy(Bitmap.Config.ARGB_8888, false);
+        mainHandler.post(() -> {
+            if (released || localPreviewImageView == null) {
+                previewBitmap.recycle();
+                return;
+            }
+
+            Bitmap previousBitmap = latestLocalPreviewBitmap;
+            latestLocalPreviewBitmap = previewBitmap;
+            localPreviewImageView.setImageBitmap(previewBitmap);
+            if (previousBitmap != null && previousBitmap != previewBitmap) {
+                previousBitmap.recycle();
+            }
+        });
+    }
+
+    private void recycleLatestLocalPreviewBitmap() {
+        Bitmap bitmap = latestLocalPreviewBitmap;
+        latestLocalPreviewBitmap = null;
+        if (bitmap != null) {
+            bitmap.recycle();
+        }
+    }
+
+    private Bitmap centerCropScale(Bitmap source, int outputWidth, int outputHeight) {
+        if (outputWidth <= 0 || outputHeight <= 0) {
+            return source;
+        }
+
+        int sourceWidth = source.getWidth();
+        int sourceHeight = source.getHeight();
+        if (sourceWidth == outputWidth && sourceHeight == outputHeight) {
+            return source;
+        }
+
+        float sourceAspect = sourceWidth / (float) sourceHeight;
+        float outputAspect = outputWidth / (float) outputHeight;
+        int cropWidth = sourceWidth;
+        int cropHeight = sourceHeight;
+        int cropLeft = 0;
+        int cropTop = 0;
+
+        if (sourceAspect > outputAspect) {
+            cropWidth = Math.round(sourceHeight * outputAspect);
+            cropLeft = Math.max(0, (sourceWidth - cropWidth) / 2);
+        } else if (sourceAspect < outputAspect) {
+            cropHeight = Math.round(sourceWidth / outputAspect);
+            cropTop = Math.max(0, (sourceHeight - cropHeight) / 2);
+        }
+
+        Bitmap output = Bitmap.createBitmap(outputWidth, outputHeight, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(output);
+        Rect sourceRect = new Rect(
+                cropLeft,
+                cropTop,
+                cropLeft + cropWidth,
+                cropTop + cropHeight);
+        RectF outputRect = new RectF(0, 0, outputWidth, outputHeight);
+        canvas.drawBitmap(source, sourceRect, outputRect, null);
+        return output;
     }
 
     private void startFrameThread() {
