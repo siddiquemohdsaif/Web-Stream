@@ -33,6 +33,7 @@ android {
 }
 
 dependencies {
+    implementation project(':webstream-sdk')
     implementation libs.activity.ktx
     implementation libs.appcompat
     implementation libs.constraintlayout

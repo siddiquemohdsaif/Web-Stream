@@ -1,0 +1,13 @@
+{
+  "name": "webstream-node-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Minimal WebSocket relay foundation for the WebStream Android SDK.",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

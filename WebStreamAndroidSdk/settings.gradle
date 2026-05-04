@@ -24,3 +24,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "WebStreamAndroidSdk"
 include ':app'
+include ':webstream-sdk'
