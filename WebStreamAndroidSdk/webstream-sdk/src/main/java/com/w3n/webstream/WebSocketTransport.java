@@ -10,8 +10,11 @@ import org.json.JSONObject;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.EnumSet;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -37,7 +40,6 @@ final class WebSocketTransport {
 
     private static final int NORMAL_CLOSE = 1000;
     private static final int VIDEO_PACKET_TYPE = 1;
-    private static final int FORMAT_JPEG = 1;
     private static final int VIDEO_PACKET_HEADER_BYTES = 33;
 
     private final OkHttpClient okHttpClient;
@@ -46,13 +48,17 @@ final class WebSocketTransport {
     private final String userId;
     private final String displayName;
     private final String authToken;
+    private final WebStreamCallOptions.ImageFormat preferredImageFormat;
     private final Listener listener;
 
     private WebSocket webSocket;
     private boolean closed;
     private boolean joined;
     private int cUuid;
+    private Set<WebStreamCallOptions.ImageFormat> serverSupportedImageFormats =
+            EnumSet.of(WebStreamCallOptions.ImageFormat.JPEG);
     private final Map<Integer, String> participantIdsByCUuid = new HashMap<>();
+    private final Set<String> loggedParticipantsWithoutJxl = new java.util.HashSet<>();
 
     WebSocketTransport(
             OkHttpClient okHttpClient,
@@ -61,6 +67,7 @@ final class WebSocketTransport {
             String userId,
             String displayName,
             String authToken,
+            WebStreamCallOptions.ImageFormat preferredImageFormat,
             Listener listener) {
         this.okHttpClient = okHttpClient;
         this.serverUrl = serverUrl;
@@ -68,6 +75,9 @@ final class WebSocketTransport {
         this.userId = userId;
         this.displayName = displayName;
         this.authToken = authToken;
+        this.preferredImageFormat = preferredImageFormat == null
+                ? WebStreamCallOptions.ImageFormat.JXL
+                : preferredImageFormat;
         this.listener = listener;
     }
 
@@ -139,34 +149,43 @@ final class WebSocketTransport {
     }
 
     void sendVideoFrame(
-            byte[] jpegData,
+            byte[] encodedData,
+            WebStreamCallOptions.ImageFormat imageFormat,
             int width,
             int height,
             int frameRateFps,
             int bitrateKbps,
             long timestampMs,
             long sequence) {
-        if (webSocket == null || closed || !joined || jpegData == null || jpegData.length == 0) {
+        if (webSocket == null || closed || !joined || encodedData == null || encodedData.length == 0) {
             return;
         }
         if (cUuid == 0) {
             Log.d(SdkConstants.TAG, "Skipping binary video frame before c_uuid assignment. callId=" + callId);
             return;
         }
+        WebStreamCallOptions.ImageFormat packetFormat = imageFormat == null
+                ? WebStreamCallOptions.ImageFormat.JPEG
+                : imageFormat;
+        if (!serverSupportedImageFormats.contains(packetFormat)) {
+            Log.d(SdkConstants.TAG, "Skipping " + packetFormat.getWireName()
+                    + " frame; server did not advertise support. callId=" + callId);
+            return;
+        }
         ByteBuffer packet = ByteBuffer
-                .allocate(VIDEO_PACKET_HEADER_BYTES + jpegData.length)
+                .allocate(VIDEO_PACKET_HEADER_BYTES + encodedData.length)
                 .order(ByteOrder.BIG_ENDIAN);
         packet.putShort((short) VIDEO_PACKET_TYPE);
         packet.putInt(cUuid);
         packet.putLong(timestampMs);
-        packet.put((byte) FORMAT_JPEG);
+        packet.put((byte) packetFormat.getBinaryValue());
         packet.putShort((short) clampUnsignedShort(width));
         packet.putShort((short) clampUnsignedShort(height));
         packet.putShort((short) clampUnsignedShort(frameRateFps));
         packet.putInt(Math.max(0, bitrateKbps));
         packet.putInt((int) sequence);
-        packet.putInt(jpegData.length);
-        packet.put(jpegData);
+        packet.putInt(encodedData.length);
+        packet.put(encodedData);
         webSocket.send(ByteString.of(packet.array()));
     }
 
@@ -208,6 +227,7 @@ final class WebSocketTransport {
             if (!TextUtils.isEmpty(authToken)) {
                 message.put("authToken", authToken);
             }
+            message.put("mediaCapabilities", buildMediaCapabilities());
             sendJson(message);
         } catch (JSONException error) {
             if (listener != null) {
@@ -234,6 +254,7 @@ final class WebSocketTransport {
             if ("server.joined".equals(type)) {
                 joined = true;
                 cUuid = message.optInt("cUuid", 0);
+                rememberServerMediaCapabilities(message.optJSONObject("mediaCapabilities"));
                 if (cUuid != 0) {
                     participantIdsByCUuid.put(cUuid, userId);
                 }
@@ -290,7 +311,8 @@ final class WebSocketTransport {
             int type = Short.toUnsignedInt(packet.getShort());
             int frameCUuid = packet.getInt();
             long timestampMs = packet.getLong();
-            int format = Byte.toUnsignedInt(packet.get());
+            WebStreamCallOptions.ImageFormat imageFormat =
+                    WebStreamCallOptions.ImageFormat.fromBinaryValue(Byte.toUnsignedInt(packet.get()));
             int width = Short.toUnsignedInt(packet.getShort());
             int height = Short.toUnsignedInt(packet.getShort());
             int frameRateFps = Short.toUnsignedInt(packet.getShort());
@@ -298,17 +320,18 @@ final class WebSocketTransport {
             long sequence = Integer.toUnsignedLong(packet.getInt());
             int payloadLength = packet.getInt();
 
-            if (type != VIDEO_PACKET_TYPE || format != FORMAT_JPEG || payloadLength <= 0
+            if (type != VIDEO_PACKET_TYPE || imageFormat == null || payloadLength <= 0
                     || payloadLength > packet.remaining()) {
                 Log.d(SdkConstants.TAG, "Invalid binary video packet. callId=" + callId);
                 return;
             }
 
-            byte[] jpegData = new byte[payloadLength];
-            packet.get(jpegData);
+            byte[] encodedData = new byte[payloadLength];
+            packet.get(encodedData);
             handleRemoteBinaryVideoFrame(
                     frameCUuid,
-                    jpegData,
+                    encodedData,
+                    imageFormat,
                     width,
                     height,
                     frameRateFps,
@@ -320,7 +343,8 @@ final class WebSocketTransport {
 
     private void handleRemoteBinaryVideoFrame(
             int frameCUuid,
-            byte[] jpegData,
+            byte[] encodedData,
+            WebStreamCallOptions.ImageFormat imageFormat,
             int width,
             int height,
             int frameRateFps,
@@ -338,7 +362,8 @@ final class WebSocketTransport {
         if (listener != null) {
             listener.onRemoteVideoFrame(new RemoteVideoFrame(
                     participantId,
-                    jpegData,
+                    encodedData,
+                    imageFormat,
                     width,
                     height,
                     timestampMs,
@@ -366,17 +391,23 @@ final class WebSocketTransport {
         if (TextUtils.isEmpty(data)) {
             return;
         }
-        byte[] jpegData;
+        byte[] encodedData;
         try {
-            jpegData = Base64.decode(data, Base64.DEFAULT);
+            encodedData = Base64.decode(data, Base64.DEFAULT);
         } catch (IllegalArgumentException error) {
             Log.d(SdkConstants.TAG, "Invalid remote video payload. participantId=" + participantId);
             return;
         }
+        WebStreamCallOptions.ImageFormat imageFormat =
+                WebStreamCallOptions.ImageFormat.fromWireName(message.optString("format", "jpeg"));
+        if (imageFormat == null) {
+            imageFormat = WebStreamCallOptions.ImageFormat.JPEG;
+        }
         if (listener != null) {
             listener.onRemoteVideoFrame(new RemoteVideoFrame(
                     participantId,
-                    jpegData,
+                    encodedData,
+                    imageFormat,
                     message.optInt("width", 0),
                     message.optInt("height", 0),
                     message.optLong("timestampMs", 0L),
@@ -401,6 +432,7 @@ final class WebSocketTransport {
         int participantCUuid = participant.optInt("cUuid", 0);
         if (!TextUtils.isEmpty(participantId) && participantCUuid != 0) {
             participantIdsByCUuid.put(participantCUuid, participantId);
+            logRemoteJxlUnsupportedIfNeeded(participantId, participant);
         }
     }
 
@@ -415,6 +447,7 @@ final class WebSocketTransport {
         if (cUuidToRemove != null) {
             participantIdsByCUuid.remove(cUuidToRemove);
         }
+        loggedParticipantsWithoutJxl.remove(participantId);
     }
 
     private int clampUnsignedShort(int value) {
@@ -422,5 +455,64 @@ final class WebSocketTransport {
             return 0;
         }
         return Math.min(value, 0xffff);
+    }
+
+    private JSONObject buildMediaCapabilities() throws JSONException {
+        JSONObject capabilities = new JSONObject();
+        capabilities.put("preferredImageFormat", preferredImageFormat.getWireName());
+        JSONArray imageFormats = new JSONArray();
+        List<WebStreamCallOptions.ImageFormat> encodableFormats = ImageFormatSupport.encodableFormats();
+        for (WebStreamCallOptions.ImageFormat format : encodableFormats) {
+            imageFormats.put(format.getWireName());
+        }
+        capabilities.put("imageFormats", imageFormats);
+        return capabilities;
+    }
+
+    private void rememberServerMediaCapabilities(JSONObject capabilities) {
+        if (capabilities == null) {
+            return;
+        }
+        JSONArray imageFormats = capabilities.optJSONArray("imageFormats");
+        if (imageFormats == null) {
+            return;
+        }
+        EnumSet<WebStreamCallOptions.ImageFormat> parsedFormats =
+                EnumSet.noneOf(WebStreamCallOptions.ImageFormat.class);
+        for (int i = 0; i < imageFormats.length(); i++) {
+            WebStreamCallOptions.ImageFormat format =
+                    WebStreamCallOptions.ImageFormat.fromWireName(imageFormats.optString(i));
+            if (format != null) {
+                parsedFormats.add(format);
+            }
+        }
+        if (!parsedFormats.isEmpty()) {
+            serverSupportedImageFormats = parsedFormats;
+        }
+    }
+
+    private void logRemoteJxlUnsupportedIfNeeded(String participantId, JSONObject participant) {
+        if (participantId.equals(userId) || loggedParticipantsWithoutJxl.contains(participantId)) {
+            return;
+        }
+        JSONArray imageFormats = participant.optJSONArray("imageFormats");
+        if (imageFormats == null) {
+            return;
+        }
+        boolean supportsJxl = false;
+        for (int i = 0; i < imageFormats.length(); i++) {
+            WebStreamCallOptions.ImageFormat format =
+                    WebStreamCallOptions.ImageFormat.fromWireName(imageFormats.optString(i));
+            if (format == WebStreamCallOptions.ImageFormat.JXL) {
+                supportsJxl = true;
+                break;
+            }
+        }
+        if (!supportsJxl) {
+            loggedParticipantsWithoutJxl.add(participantId);
+            Log.d(SdkConstants.TAG, "JXL image format is not supported by remote participant "
+                    + participantId + ". Reason: opposite phone/client did not advertise JXL in "
+                    + "mediaCapabilities.imageFormats. JPEG compatibility may be required.");
+        }
     }
 }

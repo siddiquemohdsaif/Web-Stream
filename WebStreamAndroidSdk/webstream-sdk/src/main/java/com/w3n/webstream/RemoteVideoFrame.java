@@ -2,7 +2,8 @@ package com.w3n.webstream;
 
 final class RemoteVideoFrame {
     private final String participantId;
-    private final byte[] jpegData;
+    private final byte[] encodedData;
+    private final WebStreamCallOptions.ImageFormat imageFormat;
     private final int width;
     private final int height;
     private final long timestampMs;
@@ -10,13 +11,15 @@ final class RemoteVideoFrame {
 
     RemoteVideoFrame(
             String participantId,
-            byte[] jpegData,
+            byte[] encodedData,
+            WebStreamCallOptions.ImageFormat imageFormat,
             int width,
             int height,
             long timestampMs,
             long sequence) {
         this.participantId = participantId;
-        this.jpegData = jpegData;
+        this.encodedData = encodedData;
+        this.imageFormat = imageFormat == null ? WebStreamCallOptions.ImageFormat.JPEG : imageFormat;
         this.width = width;
         this.height = height;
         this.timestampMs = timestampMs;
@@ -27,8 +30,12 @@ final class RemoteVideoFrame {
         return participantId;
     }
 
-    byte[] getJpegData() {
-        return jpegData;
+    byte[] getEncodedData() {
+        return encodedData;
+    }
+
+    WebStreamCallOptions.ImageFormat getImageFormat() {
+        return imageFormat;
     }
 
     int getWidth() {

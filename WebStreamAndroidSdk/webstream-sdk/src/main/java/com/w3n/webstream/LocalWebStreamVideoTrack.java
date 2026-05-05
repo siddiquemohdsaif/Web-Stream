@@ -29,7 +29,13 @@ import java.util.Collections;
 
 final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
     interface FrameListener {
-        void onFrame(byte[] jpegData, int width, int height, long timestampMs, long sequence);
+        void onFrame(
+                byte[] encodedData,
+                WebStreamCallOptions.ImageFormat imageFormat,
+                int width,
+                int height,
+                long timestampMs,
+                long sequence);
     }
 
     private static final int PREVIEW_WIDTH = 640;
@@ -57,6 +63,8 @@ final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
     private boolean relayingFrames;
     private boolean released;
     private boolean useFrontCamera = true;
+    private boolean loggedImageFormatFallback;
+    private volatile boolean frameEncodeInProgress;
 
     LocalWebStreamVideoTrack(
             Context applicationContext,
@@ -354,6 +362,7 @@ final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
 
     private void stopFrameRelay() {
         relayingFrames = false;
+        frameEncodeInProgress = false;
         if (textureView != null) {
             textureView.removeCallbacks(relayFrameRunnable);
         }
@@ -369,13 +378,17 @@ final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
         if (!relayingFrames || !enabled || released || textureView == null) {
             return;
         }
-        if (textureView.isAvailable() && frameHandler != null && frameListener != null) {
+        if (!frameEncodeInProgress
+                && textureView.isAvailable()
+                && frameHandler != null
+                && frameListener != null) {
             Bitmap bitmap = getAspectPreservingTextureBitmap(
                     options.getVideoWidth(),
                     options.getVideoHeight());
             if (bitmap != null) {
                 long timestampMs = System.currentTimeMillis();
                 long sequence = ++frameSequence;
+                frameEncodeInProgress = true;
                 frameHandler.post(() -> encodeAndDispatchFrame(
                         bitmap,
                         options.getVideoWidth(),
@@ -420,19 +433,48 @@ final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
             long sequence) {
         Bitmap encodedBitmap = centerCropScale(bitmap, outputWidth, outputHeight);
         try {
-            ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-            encodedBitmap.compress(Bitmap.CompressFormat.JPEG, options.getJpegQuality(), outputStream);
+            WebStreamCallOptions.ImageFormat requestedFormat = options.getImageFormat();
+            WebStreamCallOptions.ImageFormat encodedFormat =
+                    ImageFormatSupport.resolveEncodableFormat(requestedFormat);
+            if (requestedFormat != encodedFormat && !loggedImageFormatFallback) {
+                loggedImageFormatFallback = true;
+                Log.d(SdkConstants.TAG, "Image format " + requestedFormat.getWireName()
+                        + " is not supported by this phone/build. "
+                        + "Reason: " + ImageFormatSupport.unsupportedReason(requestedFormat) + ". "
+                        + "Using " + encodedFormat.getWireName()
+                        + " fallback for outgoing video frames.");
+            }
+            byte[] encodedData = encodeBitmap(encodedBitmap, encodedFormat);
+            if (encodedData == null || encodedData.length == 0) {
+                WebStreamCallOptions.ImageFormat failedFormat = encodedFormat;
+                encodedFormat = WebStreamCallOptions.ImageFormat.JPEG;
+                if (failedFormat != encodedFormat && !loggedImageFormatFallback) {
+                    loggedImageFormatFallback = true;
+                    Log.d(SdkConstants.TAG, "Image format " + failedFormat.getWireName()
+                            + " failed while encoding on this phone/build. Reason: "
+                            + NativeJxlCodec.lastError() + ". "
+                            + "Using JPEG fallback for outgoing video frames.");
+                }
+                encodedData = encodeBitmap(encodedBitmap, encodedFormat);
+                if ((encodedData == null || encodedData.length == 0) && !loggedImageFormatFallback) {
+                    loggedImageFormatFallback = true;
+                    Log.d(SdkConstants.TAG, "Unable to encode outgoing video frame; no image "
+                            + "format produced usable bytes.");
+                }
+            }
             updateLocalPreview(encodedBitmap);
             FrameListener listener = frameListener;
-            if (listener != null && !released && enabled) {
+            if (listener != null && !released && enabled && encodedData != null && encodedData.length > 0) {
                 listener.onFrame(
-                        outputStream.toByteArray(),
+                        encodedData,
+                        encodedFormat,
                         encodedBitmap.getWidth(),
                         encodedBitmap.getHeight(),
                         timestampMs,
                         sequence);
             }
         } finally {
+            frameEncodeInProgress = false;
             if (encodedBitmap != bitmap) {
                 encodedBitmap.recycle();
             }
@@ -440,8 +482,21 @@ final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
         }
     }
 
+    private byte[] encodeBitmap(
+            Bitmap bitmap,
+            WebStreamCallOptions.ImageFormat imageFormat) {
+        if (imageFormat == WebStreamCallOptions.ImageFormat.JXL) {
+            return NativeJxlCodec.encode(bitmap, options.getJpegQuality());
+        }
+        ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+        if (!bitmap.compress(Bitmap.CompressFormat.JPEG, options.getJpegQuality(), outputStream)) {
+            return null;
+        }
+        return outputStream.toByteArray();
+    }
+
     private void updateLocalPreview(Bitmap bitmap) {
-        if (bitmap == null || released || !enabled) {
+        if (bitmap == null || released || !enabled || localPreviewImageView == null) {
             return;
         }
 

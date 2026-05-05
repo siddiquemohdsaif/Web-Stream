@@ -2,6 +2,8 @@ plugins {
     alias(libs.plugins.android.library)
 }
 
+def webstreamLibjxlRoot = providers.gradleProperty('webstreamLibjxlRoot').orNull
+
 android {
     namespace 'com.w3n.webstream'
     compileSdk 35
@@ -11,11 +13,27 @@ android {
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles "consumer-rules.pro"
+
+        externalNativeBuild {
+            cmake {
+                cppFlags '-std=c++17'
+                arguments '-DANDROID_STL=c++_shared'
+                if (webstreamLibjxlRoot != null && !webstreamLibjxlRoot.trim().isEmpty()) {
+                    arguments "-DWEBSTREAM_LIBJXL_ROOT=${webstreamLibjxlRoot}"
+                }
+            }
+        }
     }
 
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_11
         targetCompatibility JavaVersion.VERSION_11
+    }
+
+    externalNativeBuild {
+        cmake {
+            path 'src/main/cpp/CMakeLists.txt'
+        }
     }
 }
 

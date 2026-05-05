@@ -31,6 +31,7 @@ final class LocalWebStreamCall implements WebStreamCall {
     private final Map<String, RemoteWebStreamVideoTrack> remoteVideoTracks = new HashMap<>();
     private boolean cameraEnabled = true;
     private boolean microphoneMuted;
+    private boolean loggedJxlFallback;
 
     LocalWebStreamCall(
             String callId,
@@ -141,6 +142,7 @@ final class LocalWebStreamCall implements WebStreamCall {
         if (state != CallState.CONNECTING) {
             return;
         }
+        logJxlFallbackIfNeeded();
         transport = new WebSocketTransport(
                 okHttpClient,
                 serverUrl,
@@ -148,6 +150,7 @@ final class LocalWebStreamCall implements WebStreamCall {
                 userId,
                 displayName,
                 authToken,
+                options.getImageFormat(),
                 new WebSocketTransport.Listener() {
                     @Override
                     public void onJoined() {
@@ -250,11 +253,12 @@ final class LocalWebStreamCall implements WebStreamCall {
 
     private LocalWebStreamVideoTrack createLocalVideoTrack() {
         LocalWebStreamVideoTrack track = new LocalWebStreamVideoTrack(applicationContext, userId, options);
-        track.setFrameListener((jpegData, width, height, timestampMs, sequence) -> {
+        track.setFrameListener((encodedData, imageFormat, width, height, timestampMs, sequence) -> {
             WebSocketTransport activeTransport = transport;
             if (state == CallState.CONNECTED && activeTransport != null) {
                 activeTransport.sendVideoFrame(
-                        jpegData,
+                        encodedData,
+                        imageFormat,
                         width,
                         height,
                         options.getFrameRateFps(),
@@ -277,7 +281,7 @@ final class LocalWebStreamCall implements WebStreamCall {
             remoteVideoTracks.put(frame.getParticipantId(), track);
             isNewTrack = true;
         }
-        track.updateFrame(frame.getJpegData());
+        track.updateFrame(frame);
         if (isNewTrack && listener != null) {
             Log.d(SdkConstants.TAG, "Dispatching remote video track. participantId="
                     + frame.getParticipantId());
@@ -328,6 +332,18 @@ final class LocalWebStreamCall implements WebStreamCall {
         if (state == CallState.CONNECTED && activeTransport != null) {
             activeTransport.sendMediaState(microphoneMuted, cameraEnabled);
         }
+    }
+
+    private void logJxlFallbackIfNeeded() {
+        if (loggedJxlFallback
+                || options.getImageFormat() != WebStreamCallOptions.ImageFormat.JXL
+                || ImageFormatSupport.canEncode(WebStreamCallOptions.ImageFormat.JXL)) {
+            return;
+        }
+        loggedJxlFallback = true;
+        Log.d(SdkConstants.TAG, "JXL image format is not supported by this phone/build. "
+                + "Reason: " + ImageFormatSupport.unsupportedReason(WebStreamCallOptions.ImageFormat.JXL) + ". "
+                + "Using JPEG fallback for outgoing video frames.");
     }
 
     private void fail(Throwable error) {

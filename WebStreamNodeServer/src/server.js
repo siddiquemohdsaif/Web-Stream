@@ -6,7 +6,10 @@ const wss = new WebSocket.Server({ port, host: '0.0.0.0' });
 const calls = new Map();
 const VIDEO_PACKET_TYPE = 1;
 const FORMAT_JPEG = 1;
+const FORMAT_JXL = 2;
 const VIDEO_PACKET_HEADER_BYTES = 33;
+const SUPPORTED_IMAGE_FORMATS = ['jpeg', 'jxl'];
+const DEFAULT_IMAGE_FORMAT = 'jxl';
 
 function send(ws, message) {
   if (ws.readyState === WebSocket.OPEN) {
@@ -28,7 +31,39 @@ function publicParticipant(ws) {
     displayName: ws.webStreamDisplayName || null,
     microphoneMuted: Boolean(ws.webStreamMicrophoneMuted),
     cameraEnabled: ws.webStreamCameraEnabled !== false,
+    imageFormats: ws.webStreamImageFormats || [],
+    preferredImageFormat: ws.webStreamPreferredImageFormat || null,
   };
+}
+
+function publicMediaCapabilities() {
+  return {
+    imageFormats: SUPPORTED_IMAGE_FORMATS,
+    defaultImageFormat: DEFAULT_IMAGE_FORMAT,
+  };
+}
+
+function normalizeImageFormat(value) {
+  const format = String(value || '').trim().toLowerCase();
+  return SUPPORTED_IMAGE_FORMATS.includes(format) ? format : null;
+}
+
+function normalizeImageFormats(values) {
+  if (!Array.isArray(values)) {
+    return ['jpeg'];
+  }
+  const formats = [];
+  for (const value of values) {
+    const format = normalizeImageFormat(value);
+    if (format && !formats.includes(format)) {
+      formats.push(format);
+    }
+  }
+  return formats.length > 0 ? formats : ['jpeg'];
+}
+
+function isSupportedBinaryImageFormat(format) {
+  return format === FORMAT_JPEG || format === FORMAT_JXL;
 }
 
 function generateCUuid(callId, userId, participants) {
@@ -104,6 +139,12 @@ function handleJoin(ws, message) {
   ws.webStreamDisplayName = String(message.displayName || '').trim();
   ws.webStreamMicrophoneMuted = false;
   ws.webStreamCameraEnabled = true;
+  ws.webStreamImageFormats = normalizeImageFormats(
+    message.mediaCapabilities && message.mediaCapabilities.imageFormats
+  );
+  ws.webStreamPreferredImageFormat =
+    normalizeImageFormat(message.mediaCapabilities && message.mediaCapabilities.preferredImageFormat)
+    || ws.webStreamImageFormats[0];
 
   const existingParticipants = Array.from(participants).map(publicParticipant);
   activeParticipants.add(ws);
@@ -113,6 +154,7 @@ function handleJoin(ws, message) {
     callId,
     userId,
     cUuid: ws.webStreamCUuid,
+    mediaCapabilities: publicMediaCapabilities(),
     participants: existingParticipants,
   });
 
@@ -148,7 +190,7 @@ function isValidBinaryVideoPacket(ws, packet) {
     if (
       type !== VIDEO_PACKET_TYPE ||
       cUuid !== ws.webStreamCUuid ||
-      format !== FORMAT_JPEG ||
+      !isSupportedBinaryImageFormat(format) ||
       payloadLength === 0 ||
       nextOffset > packet.length
     ) {
@@ -239,7 +281,7 @@ function relayVideoFrame(ws, message) {
     callId,
     userId,
     timestampMs: Number(message.timestampMs || Date.now()),
-    format: 'jpeg',
+    format: normalizeImageFormat(message.format) || 'jpeg',
     width: Number(message.width || 0),
     height: Number(message.height || 0),
     frameRateFps: Number(message.frameRateFps || 0),

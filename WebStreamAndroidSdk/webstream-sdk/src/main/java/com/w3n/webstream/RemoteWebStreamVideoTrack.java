@@ -72,12 +72,26 @@ final class RemoteWebStreamVideoTrack implements WebStreamVideoTrack {
         attachedView = null;
     }
 
-    void updateFrame(byte[] jpegData) {
-        if (released || !enabled || jpegData == null || jpegData.length == 0) {
+    void updateFrame(RemoteVideoFrame frame) {
+        if (released || !enabled || frame == null
+                || frame.getEncodedData() == null || frame.getEncodedData().length == 0) {
             return;
         }
+        WebStreamCallOptions.ImageFormat imageFormat = frame.getImageFormat();
+        if (!ImageFormatSupport.canDecode(imageFormat)) {
+            Log.d(SdkConstants.TAG, "Skipping remote " + imageFormat.getWireName()
+                    + " frame; decoder is not available on this phone/build. Reason: "
+                    + ImageFormatSupport.unsupportedReason(imageFormat) + ".");
+            return;
+        }
+        byte[] encodedData = frame.getEncodedData();
         decodeHandler.post(() -> {
-            Bitmap bitmap = BitmapFactory.decodeByteArray(jpegData, 0, jpegData.length);
+            Bitmap bitmap;
+            if (imageFormat == WebStreamCallOptions.ImageFormat.JXL) {
+                bitmap = NativeJxlCodec.decode(encodedData);
+            } else {
+                bitmap = BitmapFactory.decodeByteArray(encodedData, 0, encodedData.length);
+            }
             if (bitmap == null) {
                 return;
             }

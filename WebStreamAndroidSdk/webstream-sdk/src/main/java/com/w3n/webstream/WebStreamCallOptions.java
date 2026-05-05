@@ -10,6 +10,48 @@ public final class WebStreamCallOptions {
         HIGH
     }
 
+    public enum ImageFormat {
+        JPEG("jpeg", 1),
+        JXL("jxl", 2);
+
+        private final String wireName;
+        private final int binaryValue;
+
+        ImageFormat(String wireName, int binaryValue) {
+            this.wireName = wireName;
+            this.binaryValue = binaryValue;
+        }
+
+        public String getWireName() {
+            return wireName;
+        }
+
+        int getBinaryValue() {
+            return binaryValue;
+        }
+
+        static ImageFormat fromBinaryValue(int value) {
+            for (ImageFormat format : values()) {
+                if (format.binaryValue == value) {
+                    return format;
+                }
+            }
+            return null;
+        }
+
+        static ImageFormat fromWireName(String value) {
+            if (value == null) {
+                return null;
+            }
+            for (ImageFormat format : values()) {
+                if (format.wireName.equalsIgnoreCase(value)) {
+                    return format;
+                }
+            }
+            return null;
+        }
+    }
+
 //    static final int MIN_WIDTH = 160;
 //    static final int MAX_WIDTH = 1280;
 //    static final int MIN_HEIGHT = 120;
@@ -24,6 +66,7 @@ public final class WebStreamCallOptions {
     private final int frameRateFps;
     private final int bitrateKbps;
     private final QualityPreset qualityPreset;
+    private final ImageFormat imageFormat;
 
     private WebStreamCallOptions(Builder builder) {
         this.videoWidth = builder.videoWidth;
@@ -31,6 +74,7 @@ public final class WebStreamCallOptions {
         this.frameRateFps = builder.frameRateFps;
         this.bitrateKbps = builder.bitrateKbps;
         this.qualityPreset = builder.qualityPreset;
+        this.imageFormat = builder.imageFormat == null ? ImageFormat.JXL : builder.imageFormat;
     }
 
     public static WebStreamCallOptions lowQuality() {
@@ -67,6 +111,10 @@ public final class WebStreamCallOptions {
 
     public QualityPreset getQualityPreset() {
         return qualityPreset;
+    }
+
+    public ImageFormat getImageFormat() {
+        return imageFormat;
     }
 
     int getJpegQuality() {
@@ -115,6 +163,7 @@ public final class WebStreamCallOptions {
         private int frameRateFps;
         private int bitrateKbps;
         private QualityPreset qualityPreset;
+        private ImageFormat imageFormat = ImageFormat.JXL;
 
         public Builder() {
             applyPreset(QualityPreset.MEDIUM);
@@ -142,6 +191,11 @@ public final class WebStreamCallOptions {
 
         public Builder bitrateKbps(int bitrateKbps) {
             this.bitrateKbps = bitrateKbps;
+            return this;
+        }
+
+        public Builder imageFormat(ImageFormat imageFormat) {
+            this.imageFormat = imageFormat == null ? ImageFormat.JXL : imageFormat;
             return this;
         }
 
