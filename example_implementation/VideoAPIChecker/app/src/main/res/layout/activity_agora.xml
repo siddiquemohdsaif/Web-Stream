@@ -1,0 +1,213 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/agoraRoot"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#050606"
+    android:keepScreenOn="true"
+    tools:context=".agora.AgoraActivity">
+
+    <FrameLayout
+        android:id="@+id/remoteVideoContainer"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#050606">
+
+        <TextView
+            android:id="@+id/remotePlaceholder"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:gravity="center"
+            android:padding="32dp"
+            android:text="Waiting for remote video"
+            android:textColor="#D7FFFFFF"
+            android:textSize="18sp" />
+    </FrameLayout>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="190dp"
+        android:layout_gravity="top"
+        android:background="@drawable/bg_call_top_scrim" />
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="230dp"
+        android:layout_gravity="bottom"
+        android:background="@drawable/bg_call_bottom_scrim" />
+
+    <LinearLayout
+        android:id="@+id/agoraSetupPanel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top"
+        android:layout_marginStart="20dp"
+        android:layout_marginTop="24dp"
+        android:layout_marginEnd="20dp"
+        android:background="@drawable/bg_call_setup_panel"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Agora video call"
+            android:textColor="#FFFFFFFF"
+            android:textSize="22sp"
+            android:textStyle="bold" />
+
+        <EditText
+            android:id="@+id/appIdInput"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:layout_marginTop="14dp"
+            android:backgroundTint="#66FFFFFF"
+            android:hint="Agora App ID"
+            android:inputType="text"
+            android:singleLine="true"
+            android:text="78b28ff65088422eb6b838222226abf3"
+            android:textColor="#FFFFFFFF"
+            android:textColorHint="#B3FFFFFF" />
+
+        <EditText
+            android:id="@+id/tokenInput"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:backgroundTint="#66FFFFFF"
+            android:hint="Token (optional)"
+            android:inputType="text"
+            android:singleLine="true"
+            android:textColor="#FFFFFFFF"
+            android:textColorHint="#B3FFFFFF" />
+
+        <EditText
+            android:id="@+id/channelInput"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:backgroundTint="#66FFFFFF"
+            android:hint="Channel name"
+            android:inputType="text"
+            android:singleLine="true"
+            android:text="test-call"
+            android:textColor="#FFFFFFFF"
+            android:textColorHint="#B3FFFFFF" />
+
+        <Button
+            android:id="@+id/joinButton"
+            android:layout_width="match_parent"
+            android:layout_height="52dp"
+            android:layout_marginTop="14dp"
+            android:backgroundTint="#25D366"
+            android:text="Start video call"
+            android:textColor="#FFFFFFFF"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/agoraCallHeader"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top"
+        android:layout_marginStart="20dp"
+        android:layout_marginTop="28dp"
+        android:layout_marginEnd="158dp"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Agora"
+            android:textColor="#FFFFFFFF"
+            android:textSize="24sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/statusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Idle"
+            android:textColor="#D9FFFFFF"
+            android:textSize="14sp" />
+
+        <TextView
+            android:id="@+id/agoraCallDurationText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:text="Connected: 0 sec"
+            android:textColor="#BFFFFFFF"
+            android:textSize="13sp" />
+    </LinearLayout>
+
+    <FrameLayout
+        android:id="@+id/localVideoContainer"
+        android:layout_width="118dp"
+        android:layout_height="168dp"
+        android:layout_gravity="top|end"
+        android:layout_marginTop="92dp"
+        android:layout_marginEnd="18dp"
+        android:background="@drawable/bg_local_video_frame"
+        android:elevation="12dp"
+        android:padding="2dp">
+
+        <TextView
+            android:id="@+id/localPlaceholder"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:gravity="center"
+            android:text="You"
+            android:textColor="#FFFFFFFF"
+            android:textSize="15sp"
+            android:textStyle="bold" />
+    </FrameLayout>
+
+    <LinearLayout
+        android:id="@+id/agoraCallControls"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:gravity="center"
+        android:orientation="horizontal"
+        android:paddingStart="18dp"
+        android:paddingTop="18dp"
+        android:paddingEnd="18dp"
+        android:paddingBottom="28dp"
+        android:visibility="gone">
+
+        <Button
+            android:id="@+id/muteButton"
+            android:layout_width="0dp"
+            android:layout_height="54dp"
+            android:layout_weight="1"
+            android:backgroundTint="#2B3431"
+            android:enabled="false"
+            android:text="Mute"
+            android:textColor="#FFFFFFFF" />
+
+        <Button
+            android:id="@+id/switchCameraButton"
+            android:layout_width="0dp"
+            android:layout_height="54dp"
+            android:layout_marginStart="10dp"
+            android:layout_weight="1"
+            android:backgroundTint="#2B3431"
+            android:enabled="false"
+            android:text="Flip"
+            android:textColor="#FFFFFFFF" />
+
+        <Button
+            android:id="@+id/leaveButton"
+            android:layout_width="0dp"
+            android:layout_height="54dp"
+            android:layout_marginStart="10dp"
+            android:layout_weight="1"
+            android:backgroundTint="#E53935"
+            android:enabled="false"
+            android:text="End"
+            android:textColor="#FFFFFFFF"
+            android:textStyle="bold" />
+    </LinearLayout>
+</FrameLayout>

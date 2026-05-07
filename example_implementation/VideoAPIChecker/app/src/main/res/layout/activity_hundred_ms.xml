@@ -1,0 +1,223 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/hundredMsRoot"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#050606"
+    android:keepScreenOn="true"
+    tools:context=".hundredms.HundredMsActivity">
+
+    <FrameLayout
+        android:id="@+id/remoteHmsVideoContainer"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#050606">
+
+        <live.hms.videoview.HMSVideoView
+            android:id="@+id/remoteHmsVideoView"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <TextView
+            android:id="@+id/remoteHmsPlaceholder"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:gravity="center"
+            android:padding="32dp"
+            android:text="Waiting for remote video"
+            android:textColor="#D7FFFFFF"
+            android:textSize="18sp" />
+    </FrameLayout>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="190dp"
+        android:layout_gravity="top"
+        android:background="@drawable/bg_call_top_scrim" />
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="230dp"
+        android:layout_gravity="bottom"
+        android:background="@drawable/bg_call_bottom_scrim" />
+
+    <LinearLayout
+        android:id="@+id/hmsSetupPanel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top"
+        android:layout_marginStart="20dp"
+        android:layout_marginTop="24dp"
+        android:layout_marginEnd="20dp"
+        android:background="@drawable/bg_call_setup_panel"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="100ms video call"
+            android:textColor="#FFFFFFFF"
+            android:textSize="22sp"
+            android:textStyle="bold" />
+
+        <EditText
+            android:id="@+id/userNameInput"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:layout_marginTop="14dp"
+            android:backgroundTint="#66FFFFFF"
+            android:hint="Display name"
+            android:inputType="textPersonName"
+            android:singleLine="true"
+            android:text="Android User"
+            android:textColor="#FFFFFFFF"
+            android:textColorHint="#B3FFFFFF" />
+
+        <EditText
+            android:id="@+id/roomCodeInput"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:backgroundTint="#66FFFFFF"
+            android:hint="Room code"
+            android:inputType="text"
+            android:singleLine="true"
+            android:textColor="#FFFFFFFF"
+            android:textColorHint="#B3FFFFFF" />
+
+        <EditText
+            android:id="@+id/authTokenInput"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:backgroundTint="#66FFFFFF"
+            android:hint="Auth token (optional)"
+            android:inputType="text"
+            android:singleLine="true"
+            android:text="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ2ZXJzaW9uIjoyLCJ0eXBlIjoiYXBwIiwiYXBwX2RhdGEiOm51bGwsImFjY2Vzc19rZXkiOiI2OWYyMDVjOWY4ZTgwYTY3NDk5N2U4MTUiLCJyb2xlIjoiZ3Vlc3QiLCJyb29tX2lkIjoiNjlmMmY2MmE4MTE0MWVjNGM5OTY4NjczIiwidXNlcl9pZCI6IjkzMTY3MDMwLWQyY2QtNGYzMy1iY2E1LWM1NjQ3OWY1YjZhNSIsImV4cCI6MTc3Nzk2NDg2MywianRpIjoiMzZiZTlkNTEtZTYxZi00ZDhhLTkwOWYtYWM4NmZiMGE4N2VhIiwiaWF0IjoxNzc3ODc4NDYzLCJpc3MiOiI2OWYyMDVjOWY4ZTgwYTY3NDk5N2U4MTMiLCJuYmYiOjE3Nzc4Nzg0NjMsInN1YiI6ImFwaSJ9.Xk-wIPdZ9nqrI4Mk0KAv93CYiZ83txNwBtkXzrcp_LI"
+            android:textColor="#FFFFFFFF"
+            android:textColorHint="#B3FFFFFF" />
+
+        <Button
+            android:id="@+id/hmsJoinButton"
+            android:layout_width="match_parent"
+            android:layout_height="52dp"
+            android:layout_marginTop="14dp"
+            android:backgroundTint="#25D366"
+            android:text="Start video call"
+            android:textColor="#FFFFFFFF"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/hmsCallHeader"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top"
+        android:layout_marginStart="20dp"
+        android:layout_marginTop="28dp"
+        android:layout_marginEnd="158dp"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="100ms"
+            android:textColor="#FFFFFFFF"
+            android:textSize="24sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/hmsStatusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Idle"
+            android:textColor="#D9FFFFFF"
+            android:textSize="14sp" />
+
+        <TextView
+            android:id="@+id/hmsCallDurationText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:text="Connected: 0 sec"
+            android:textColor="#BFFFFFFF"
+            android:textSize="13sp" />
+    </LinearLayout>
+
+    <FrameLayout
+        android:id="@+id/localHmsVideoContainer"
+        android:layout_width="118dp"
+        android:layout_height="168dp"
+        android:layout_gravity="top|end"
+        android:layout_marginTop="92dp"
+        android:layout_marginEnd="18dp"
+        android:background="@drawable/bg_local_video_frame"
+        android:elevation="12dp"
+        android:padding="2dp">
+
+        <live.hms.videoview.HMSVideoView
+            android:id="@+id/localHmsVideoView"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <TextView
+            android:id="@+id/localHmsPlaceholder"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:gravity="center"
+            android:text="You"
+            android:textColor="#FFFFFFFF"
+            android:textSize="15sp"
+            android:textStyle="bold" />
+    </FrameLayout>
+
+    <LinearLayout
+        android:id="@+id/hmsCallControls"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:gravity="center"
+        android:orientation="horizontal"
+        android:paddingStart="18dp"
+        android:paddingTop="18dp"
+        android:paddingEnd="18dp"
+        android:paddingBottom="28dp"
+        android:visibility="gone">
+
+        <Button
+            android:id="@+id/hmsMuteButton"
+            android:layout_width="0dp"
+            android:layout_height="54dp"
+            android:layout_weight="1"
+            android:backgroundTint="#2B3431"
+            android:enabled="false"
+            android:text="Mute"
+            android:textColor="#FFFFFFFF" />
+
+        <Button
+            android:id="@+id/hmsSwitchCameraButton"
+            android:layout_width="0dp"
+            android:layout_height="54dp"
+            android:layout_marginStart="10dp"
+            android:layout_weight="1"
+            android:backgroundTint="#2B3431"
+            android:enabled="false"
+            android:text="Flip"
+            android:textColor="#FFFFFFFF" />
+
+        <Button
+            android:id="@+id/hmsLeaveButton"
+            android:layout_width="0dp"
+            android:layout_height="54dp"
+            android:layout_marginStart="10dp"
+            android:layout_weight="1"
+            android:backgroundTint="#E53935"
+            android:enabled="false"
+            android:text="End"
+            android:textColor="#FFFFFFFF"
+            android:textStyle="bold" />
+    </LinearLayout>
+</FrameLayout>

@@ -6,18 +6,18 @@ import android.util.Log;
 
 import java.nio.ByteBuffer;
 
-final class NativeJxlCodec {
+public final class NativeJxlCodec {
     private static final String LIBRARY_NAME = "webstream_jxl";
     private static final boolean LIBRARY_LOADED = loadLibrary();
 
     private NativeJxlCodec() {
     }
 
-    static boolean isAvailable() {
+    public static boolean isAvailable() {
         return LIBRARY_LOADED && nativeIsAvailable();
     }
 
-    static byte[] encode(Bitmap bitmap, int quality) {
+    public static byte[] encode(Bitmap bitmap, int quality) {
         if (bitmap == null || bitmap.isRecycled() || !isAvailable()) {
             return null;
         }
@@ -33,7 +33,7 @@ final class NativeJxlCodec {
         }
     }
 
-    static Bitmap decode(byte[] encodedData) {
+    public static Bitmap decode(byte[] encodedData) {
         if (encodedData == null || encodedData.length == 0 || !isAvailable()) {
             return null;
         }
@@ -53,7 +53,7 @@ final class NativeJxlCodec {
         }
     }
 
-    static String unavailableReason() {
+    public static String unavailableReason() {
         if (!LIBRARY_LOADED) {
             return "native library " + LIBRARY_NAME + " could not be loaded";
         }
@@ -68,7 +68,7 @@ final class NativeJxlCodec {
         return null;
     }
 
-    static String lastError() {
+    public static String lastError() {
         if (!LIBRARY_LOADED) {
             return "native library " + LIBRARY_NAME + " could not be loaded";
         }

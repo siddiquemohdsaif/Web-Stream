@@ -1,0 +1,214 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/webStreamRoot"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#050606"
+    android:keepScreenOn="true"
+    tools:context=".webstream.WebStreamActivity">
+
+    <FrameLayout
+        android:id="@+id/remoteWebStreamVideoContainer"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#050606">
+
+        <com.w3n.webstream.WebStreamVideoView
+            android:id="@+id/remoteWebStreamVideoView"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <TextView
+            android:id="@+id/remoteWebStreamPlaceholder"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:gravity="center"
+            android:padding="32dp"
+            android:text="Waiting for remote video"
+            android:textColor="#D7FFFFFF"
+            android:textSize="18sp" />
+    </FrameLayout>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="190dp"
+        android:layout_gravity="top"
+        android:background="@drawable/bg_call_top_scrim" />
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="230dp"
+        android:layout_gravity="bottom"
+        android:background="@drawable/bg_call_bottom_scrim" />
+
+    <LinearLayout
+        android:id="@+id/webStreamSetupPanel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top"
+        android:layout_marginStart="20dp"
+        android:layout_marginTop="24dp"
+        android:layout_marginEnd="20dp"
+        android:background="@drawable/bg_call_setup_panel"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="webStream call"
+            android:textColor="#FFFFFFFF"
+            android:textSize="22sp"
+            android:textStyle="bold" />
+
+        <EditText
+            android:id="@+id/webStreamUserIdInput"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:layout_marginTop="14dp"
+            android:backgroundTint="#66FFFFFF"
+            android:hint="User ID"
+            android:inputType="text"
+            android:singleLine="true"
+            android:text="user-a"
+            android:textColor="#FFFFFFFF"
+            android:textColorHint="#B3FFFFFF" />
+
+        <EditText
+            android:id="@+id/webStreamCallIdInput"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:backgroundTint="#66FFFFFF"
+            android:hint="Call ID"
+            android:inputType="text"
+            android:singleLine="true"
+            android:text="call-123"
+            android:textColor="#FFFFFFFF"
+            android:textColorHint="#B3FFFFFF" />
+
+        <Button
+            android:id="@+id/webStreamJoinButton"
+            android:layout_width="match_parent"
+            android:layout_height="52dp"
+            android:layout_marginTop="14dp"
+            android:backgroundTint="#25D366"
+            android:text="Start call"
+            android:textColor="#FFFFFFFF"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/webStreamCallHeader"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top"
+        android:layout_marginStart="20dp"
+        android:layout_marginTop="28dp"
+        android:layout_marginEnd="158dp"
+        android:orientation="vertical"
+        android:visibility="gone">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="webStream"
+            android:textColor="#FFFFFFFF"
+            android:textSize="24sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/webStreamStatusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Idle"
+            android:textColor="#D9FFFFFF"
+            android:textSize="14sp" />
+    </LinearLayout>
+
+    <FrameLayout
+        android:id="@+id/localWebStreamVideoContainer"
+        android:layout_width="118dp"
+        android:layout_height="168dp"
+        android:layout_gravity="top|end"
+        android:layout_marginTop="92dp"
+        android:layout_marginEnd="18dp"
+        android:background="@drawable/bg_local_video_frame"
+        android:elevation="12dp"
+        android:padding="2dp">
+
+        <com.w3n.webstream.WebStreamVideoView
+            android:id="@+id/localWebStreamVideoView"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <TextView
+            android:id="@+id/localWebStreamPlaceholder"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:gravity="center"
+            android:text="You"
+            android:textColor="#FFFFFFFF"
+            android:textSize="15sp"
+            android:textStyle="bold" />
+    </FrameLayout>
+
+    <LinearLayout
+        android:id="@+id/webStreamCallControls"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:gravity="center"
+        android:orientation="horizontal"
+        android:paddingStart="18dp"
+        android:paddingTop="18dp"
+        android:paddingEnd="18dp"
+        android:paddingBottom="28dp"
+        android:visibility="gone">
+
+        <Button
+            android:id="@+id/webStreamMuteButton"
+            android:layout_width="0dp"
+            android:layout_height="54dp"
+            android:layout_weight="1"
+            android:backgroundTint="#2B3431"
+            android:enabled="false"
+            android:text="Mute"
+            android:textColor="#FFFFFFFF" />
+
+        <Button
+            android:id="@+id/webStreamCameraButton"
+            android:layout_width="0dp"
+            android:layout_height="54dp"
+            android:layout_marginStart="10dp"
+            android:layout_weight="1"
+            android:backgroundTint="#2B3431"
+            android:enabled="false"
+            android:text="Camera Off"
+            android:textColor="#FFFFFFFF" />
+
+        <Button
+            android:id="@+id/webStreamSwitchCameraButton"
+            android:layout_width="0dp"
+            android:layout_height="54dp"
+            android:layout_marginStart="10dp"
+            android:layout_weight="1"
+            android:backgroundTint="#2B3431"
+            android:enabled="false"
+            android:text="Flip"
+            android:textColor="#FFFFFFFF" />
+
+        <Button
+            android:id="@+id/webStreamLeaveButton"
+            android:layout_width="0dp"
+            android:layout_height="54dp"
+            android:layout_marginStart="10dp"
+            android:layout_weight="1"
+            android:backgroundTint="#E53935"
+            android:enabled="false"
+            android:text="End"
+            android:textColor="#FFFFFFFF"
+            android:textStyle="bold" />
+    </LinearLayout>
+</FrameLayout>

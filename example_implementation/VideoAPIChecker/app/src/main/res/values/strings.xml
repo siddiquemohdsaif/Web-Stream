@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">VideoAPIChecker</string>
+    <string name="provider_agora">Agora</string>
+    <string name="provider_hundred_ms">100ms</string>
+</resources>
