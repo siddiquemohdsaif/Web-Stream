@@ -11,7 +11,7 @@ final class ImageFormatSupport {
     static WebStreamCallOptions.ImageFormat resolveEncodableFormat(
             WebStreamCallOptions.ImageFormat requestedFormat) {
         WebStreamCallOptions.ImageFormat format = requestedFormat == null
-                ? WebStreamCallOptions.ImageFormat.JXL
+                ? WebStreamCallOptions.ImageFormat.H264
                 : requestedFormat;
         if (canEncode(format)) {
             return format;
@@ -23,6 +23,9 @@ final class ImageFormatSupport {
         if (format == WebStreamCallOptions.ImageFormat.JPEG) {
             return true;
         }
+        if (format == WebStreamCallOptions.ImageFormat.H264) {
+            return NativeH264Codec.isEncoderAvailable();
+        }
         return format == WebStreamCallOptions.ImageFormat.JXL && NativeJxlCodec.isAvailable();
     }
 
@@ -30,10 +33,16 @@ final class ImageFormatSupport {
         if (format == WebStreamCallOptions.ImageFormat.JPEG) {
             return true;
         }
+        if (format == WebStreamCallOptions.ImageFormat.H264) {
+            return NativeH264Codec.isDecoderAvailable();
+        }
         return format == WebStreamCallOptions.ImageFormat.JXL && NativeJxlCodec.isAvailable();
     }
 
     static String unsupportedReason(WebStreamCallOptions.ImageFormat format) {
+        if (format == WebStreamCallOptions.ImageFormat.H264) {
+            return "this phone/build does not expose an Android MediaCodec H.264 encoder or decoder";
+        }
         if (format == WebStreamCallOptions.ImageFormat.JXL) {
             return NativeJxlCodec.unavailableReason();
         }

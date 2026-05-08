@@ -6,10 +6,10 @@ import org.junit.Test;
 
 public class WebStreamCallOptionsTest {
     @Test
-    public void defaultOptionsPreferJxl() {
+    public void defaultOptionsPreferH264() {
         WebStreamCallOptions options = WebStreamCallOptions.defaultOptions();
 
-        assertEquals(WebStreamCallOptions.ImageFormat.JXL, options.getImageFormat());
+        assertEquals(WebStreamCallOptions.ImageFormat.H264, options.getImageFormat());
     }
 
     @Test

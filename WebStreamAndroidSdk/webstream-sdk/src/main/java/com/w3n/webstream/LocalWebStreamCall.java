@@ -27,11 +27,12 @@ final class LocalWebStreamCall implements WebStreamCall {
     private final EndListener endListener;
     private CallState state = CallState.IDLE;
     private LocalWebStreamVideoTrack localVideoTrack;
+    private LocalVideoPacketRecorder localVideoPacketRecorder;
     private WebSocketTransport transport;
     private final Map<String, RemoteWebStreamVideoTrack> remoteVideoTracks = new HashMap<>();
     private boolean cameraEnabled = true;
     private boolean microphoneMuted;
-    private boolean loggedJxlFallback;
+    private boolean loggedFormatFallback;
 
     LocalWebStreamCall(
             String callId,
@@ -134,6 +135,7 @@ final class LocalWebStreamCall implements WebStreamCall {
             localVideoTrack.release();
             localVideoTrack = null;
         }
+        closeLocalVideoPacketRecorder();
         releaseRemoteVideoTracks();
         dispatchDisconnected();
     }
@@ -142,9 +144,10 @@ final class LocalWebStreamCall implements WebStreamCall {
         if (state != CallState.CONNECTING) {
             return;
         }
-        logJxlFallbackIfNeeded();
+        logFormatFallbackIfNeeded();
         transport = new WebSocketTransport(
                 okHttpClient,
+                applicationContext,
                 serverUrl,
                 callId,
                 userId,
@@ -222,6 +225,7 @@ final class LocalWebStreamCall implements WebStreamCall {
             localVideoTrack.release();
             localVideoTrack = null;
         }
+        closeLocalVideoPacketRecorder();
         releaseRemoteVideoTracks();
         dispatchDisconnected();
     }
@@ -256,6 +260,13 @@ final class LocalWebStreamCall implements WebStreamCall {
         track.setFrameListener((encodedData, imageFormat, width, height, timestampMs, sequence) -> {
             WebSocketTransport activeTransport = transport;
             if (state == CallState.CONNECTED && activeTransport != null) {
+                recordLocalVideoPacket(
+                        encodedData,
+                        imageFormat,
+                        width,
+                        height,
+                        timestampMs,
+                        sequence);
                 activeTransport.sendVideoFrame(
                         encodedData,
                         imageFormat,
@@ -334,15 +345,16 @@ final class LocalWebStreamCall implements WebStreamCall {
         }
     }
 
-    private void logJxlFallbackIfNeeded() {
-        if (loggedJxlFallback
-                || options.getImageFormat() != WebStreamCallOptions.ImageFormat.JXL
-                || ImageFormatSupport.canEncode(WebStreamCallOptions.ImageFormat.JXL)) {
+    private void logFormatFallbackIfNeeded() {
+        WebStreamCallOptions.ImageFormat format = options.getImageFormat();
+        if (loggedFormatFallback
+                || format == WebStreamCallOptions.ImageFormat.JPEG
+                || ImageFormatSupport.canEncode(format)) {
             return;
         }
-        loggedJxlFallback = true;
-        Log.d(SdkConstants.TAG, "JXL image format is not supported by this phone/build. "
-                + "Reason: " + ImageFormatSupport.unsupportedReason(WebStreamCallOptions.ImageFormat.JXL) + ". "
+        loggedFormatFallback = true;
+        Log.d(SdkConstants.TAG, format.getWireName() + " video format is not supported by this phone/build. "
+                + "Reason: " + ImageFormatSupport.unsupportedReason(format) + ". "
                 + "Using JPEG fallback for outgoing video frames.");
     }
 
@@ -363,9 +375,40 @@ final class LocalWebStreamCall implements WebStreamCall {
             localVideoTrack.release();
             localVideoTrack = null;
         }
+        closeLocalVideoPacketRecorder();
         releaseRemoteVideoTracks();
         if (listener != null) {
             mainHandler.post(() -> listener.onError(error));
+        }
+    }
+
+    private void recordLocalVideoPacket(
+            byte[] encodedData,
+            WebStreamCallOptions.ImageFormat imageFormat,
+            int width,
+            int height,
+            long timestampMs,
+            long sequence) {
+        if (localVideoPacketRecorder == null) {
+            localVideoPacketRecorder = new LocalVideoPacketRecorder(
+                    applicationContext,
+                    callId,
+                    userId,
+                    options.getFrameRateFps());
+        }
+        localVideoPacketRecorder.writeFrame(
+                encodedData,
+                imageFormat,
+                width,
+                height,
+                timestampMs,
+                sequence);
+    }
+
+    private void closeLocalVideoPacketRecorder() {
+        if (localVideoPacketRecorder != null) {
+            localVideoPacketRecorder.close();
+            localVideoPacketRecorder = null;
         }
     }
 }

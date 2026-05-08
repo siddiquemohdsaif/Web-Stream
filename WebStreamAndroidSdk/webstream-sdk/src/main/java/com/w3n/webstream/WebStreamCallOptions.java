@@ -12,7 +12,8 @@ public final class WebStreamCallOptions {
 
     public enum ImageFormat {
         JPEG("jpeg", 1),
-        JXL("jxl", 2);
+        JXL("jxl", 2),
+        H264("h264", 3);
 
         private final String wireName;
         private final int binaryValue;
@@ -74,7 +75,7 @@ public final class WebStreamCallOptions {
         this.frameRateFps = builder.frameRateFps;
         this.bitrateKbps = builder.bitrateKbps;
         this.qualityPreset = builder.qualityPreset;
-        this.imageFormat = builder.imageFormat == null ? ImageFormat.JXL : builder.imageFormat;
+        this.imageFormat = builder.imageFormat == null ? ImageFormat.H264 : builder.imageFormat;
     }
 
     public static WebStreamCallOptions lowQuality() {
@@ -163,7 +164,7 @@ public final class WebStreamCallOptions {
         private int frameRateFps;
         private int bitrateKbps;
         private QualityPreset qualityPreset;
-        private ImageFormat imageFormat = ImageFormat.JXL;
+        private ImageFormat imageFormat = ImageFormat.H264;
 
         public Builder() {
             applyPreset(QualityPreset.MEDIUM);
@@ -195,7 +196,7 @@ public final class WebStreamCallOptions {
         }
 
         public Builder imageFormat(ImageFormat imageFormat) {
-            this.imageFormat = imageFormat == null ? ImageFormat.JXL : imageFormat;
+            this.imageFormat = imageFormat == null ? ImageFormat.H264 : imageFormat;
             return this;
         }
 

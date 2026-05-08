@@ -1,5 +1,7 @@
 package com.w3n.webstream;
 
+import java.util.Arrays;
+
 final class RemoteVideoFrame {
     private final String participantId;
     private final byte[] encodedData;
@@ -53,4 +55,19 @@ final class RemoteVideoFrame {
     long getSequence() {
         return sequence;
     }
+
+    @Override
+    public String toString() {
+        return "RemoteVideoFrame{" +
+                "participantId='" + participantId + '\'' +
+                ", imageFormat=" + imageFormat +
+                ", width=" + width +
+                ", height=" + height +
+                ", timestampMs=" + timestampMs +
+                ", sequence=" + sequence +
+                ", encodedDataLength=" + (encodedData != null ? encodedData.length : 0) +
+                ", encodedData=" + Arrays.toString(encodedData)+
+                '}';
+    }
+
 }

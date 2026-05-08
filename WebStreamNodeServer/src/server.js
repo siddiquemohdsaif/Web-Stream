@@ -7,9 +7,10 @@ const calls = new Map();
 const VIDEO_PACKET_TYPE = 1;
 const FORMAT_JPEG = 1;
 const FORMAT_JXL = 2;
+const FORMAT_H264 = 3;
 const VIDEO_PACKET_HEADER_BYTES = 33;
-const SUPPORTED_IMAGE_FORMATS = ['jpeg', 'jxl'];
-const DEFAULT_IMAGE_FORMAT = 'jxl';
+const SUPPORTED_IMAGE_FORMATS = ['jpeg', 'jxl', 'h264'];
+const DEFAULT_IMAGE_FORMAT = 'h264';
 
 function send(ws, message) {
   if (ws.readyState === WebSocket.OPEN) {
@@ -63,7 +64,7 @@ function normalizeImageFormats(values) {
 }
 
 function isSupportedBinaryImageFormat(format) {
-  return format === FORMAT_JPEG || format === FORMAT_JXL;
+  return format === FORMAT_JPEG || format === FORMAT_JXL || format === FORMAT_H264;
 }
 
 function generateCUuid(callId, userId, participants) {

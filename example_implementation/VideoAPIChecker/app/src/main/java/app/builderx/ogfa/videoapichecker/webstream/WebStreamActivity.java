@@ -202,7 +202,7 @@ public class WebStreamActivity extends AppCompatActivity {
                 .videoResolution(720, 1280)
                 .frameRateFps(15)
                 .bitrateKbps(1200)
-                .imageFormat(WebStreamCallOptions.ImageFormat.JXL)
+                .imageFormat(WebStreamCallOptions.ImageFormat.H264)
                 .build();
 
         webStreamClient = new WebStreamClient.Builder(this)

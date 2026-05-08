@@ -25,6 +25,7 @@ import android.view.ViewGroup;
 import android.widget.ImageView;
 
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.util.Collections;
 
 final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
@@ -58,12 +59,15 @@ final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
     private CameraDevice cameraDevice;
     private CameraCaptureSession captureSession;
     private FrameListener frameListener;
+    private H264FrameBatchEncoder h264FrameBatchEncoder;
     private long frameSequence;
     private boolean enabled = true;
     private boolean relayingFrames;
     private boolean released;
     private boolean useFrontCamera = true;
     private boolean loggedImageFormatFallback;
+    private boolean forceJpegFallback;
+    private int singlePacketStoreCount;
     private volatile boolean frameEncodeInProgress;
 
     LocalWebStreamVideoTrack(
@@ -134,6 +138,7 @@ final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
             localPreviewImageView = null;
         }
         recycleLatestLocalPreviewBitmap();
+        releaseH264Encoder();
         attachedView = null;
     }
 
@@ -435,7 +440,9 @@ final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
         try {
             WebStreamCallOptions.ImageFormat requestedFormat = options.getImageFormat();
             WebStreamCallOptions.ImageFormat encodedFormat =
-                    ImageFormatSupport.resolveEncodableFormat(requestedFormat);
+                    forceJpegFallback
+                            ? WebStreamCallOptions.ImageFormat.JPEG
+                            : ImageFormatSupport.resolveEncodableFormat(requestedFormat);
             if (requestedFormat != encodedFormat && !loggedImageFormatFallback) {
                 loggedImageFormatFallback = true;
                 Log.d(SdkConstants.TAG, "Image format " + requestedFormat.getWireName()
@@ -443,6 +450,33 @@ final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
                         + "Reason: " + ImageFormatSupport.unsupportedReason(requestedFormat) + ". "
                         + "Using " + encodedFormat.getWireName()
                         + " fallback for outgoing video frames.");
+            }
+            if (encodedFormat == WebStreamCallOptions.ImageFormat.H264) {
+                byte[] encodedData = encodeH264Batch(encodedBitmap, timestampMs);
+                updateLocalPreview(encodedBitmap);
+                FrameListener listener = frameListener;
+                if (listener != null && !released && enabled
+                        && encodedData != null && encodedData.length > 0) {
+                    storeSingleH264Packet(
+                            encodedData,
+                            encodedBitmap.getWidth(),
+                            encodedBitmap.getHeight(),
+                            sequence);
+                    listener.onFrame(
+                            encodedData,
+                            WebStreamCallOptions.ImageFormat.H264,
+                            encodedBitmap.getWidth(),
+                            encodedBitmap.getHeight(),
+                            timestampMs,
+                            sequence);
+                }
+                if (encodedData != null && encodedData.length > 0) {
+                    return;
+                }
+                if (!forceJpegFallback) {
+                    return;
+                }
+                encodedFormat = WebStreamCallOptions.ImageFormat.JPEG;
             }
             byte[] encodedData = encodeBitmap(encodedBitmap, encodedFormat);
             if (encodedData == null || encodedData.length == 0) {
@@ -480,6 +514,43 @@ final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
             }
             bitmap.recycle();
         }
+    }
+
+    private byte[] encodeH264Batch(Bitmap bitmap, long timestampMs) {
+        try {
+            if (h264FrameBatchEncoder == null) {
+                h264FrameBatchEncoder = new H264FrameBatchEncoder(
+                        bitmap.getWidth(),
+                        bitmap.getHeight(),
+                        options.getFrameRateFps(),
+                        options.getBitrateKbps());
+            }
+            return h264FrameBatchEncoder.encodeFrame(bitmap, timestampMs);
+        } catch (IOException | RuntimeException error) {
+            releaseH264Encoder();
+            forceJpegFallback = true;
+            if (!loggedImageFormatFallback) {
+                loggedImageFormatFallback = true;
+                Log.d(SdkConstants.TAG, "H.264 encoding failed on this phone/build. Reason: "
+                        + error.getMessage() + ". Using image fallback for outgoing video frames.");
+            }
+            return null;
+        }
+    }
+
+    private void storeSingleH264Packet(byte[] encodedData, int width, int height, long sequence) {
+        if (singlePacketStoreCount >= 10) {
+            return;
+        }
+        singlePacketStoreCount += 1;
+        SingleH264PacketMp4Store.save(
+                applicationContext,
+                participantId,
+                encodedData,
+                width,
+                height,
+                options.getFrameRateFps(),
+                sequence);
     }
 
     private byte[] encodeBitmap(
@@ -521,6 +592,13 @@ final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
         latestLocalPreviewBitmap = null;
         if (bitmap != null) {
             bitmap.recycle();
+        }
+    }
+
+    private void releaseH264Encoder() {
+        if (h264FrameBatchEncoder != null) {
+            h264FrameBatchEncoder.release();
+            h264FrameBatchEncoder = null;
         }
     }
 

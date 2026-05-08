@@ -1,5 +1,6 @@
 package com.w3n.webstream;
 
+import android.content.Context;
 import android.text.TextUtils;
 import android.util.Base64;
 import android.util.Log;
@@ -43,6 +44,7 @@ final class WebSocketTransport {
     private static final int VIDEO_PACKET_HEADER_BYTES = 33;
 
     private final OkHttpClient okHttpClient;
+    private final Context applicationContext;
     private final String serverUrl;
     private final String callId;
     private final String userId;
@@ -59,9 +61,12 @@ final class WebSocketTransport {
             EnumSet.of(WebStreamCallOptions.ImageFormat.JPEG);
     private final Map<Integer, String> participantIdsByCUuid = new HashMap<>();
     private final Set<String> loggedParticipantsWithoutJxl = new java.util.HashSet<>();
+    private int remoteSinglePacketStoreCount;
+
 
     WebSocketTransport(
             OkHttpClient okHttpClient,
+            Context applicationContext,
             String serverUrl,
             String callId,
             String userId,
@@ -70,13 +75,14 @@ final class WebSocketTransport {
             WebStreamCallOptions.ImageFormat preferredImageFormat,
             Listener listener) {
         this.okHttpClient = okHttpClient;
+        this.applicationContext = applicationContext == null ? null : applicationContext.getApplicationContext();
         this.serverUrl = serverUrl;
         this.callId = callId;
         this.userId = userId;
         this.displayName = displayName;
         this.authToken = authToken;
         this.preferredImageFormat = preferredImageFormat == null
-                ? WebStreamCallOptions.ImageFormat.JXL
+                ? WebStreamCallOptions.ImageFormat.H264
                 : preferredImageFormat;
         this.listener = listener;
     }
@@ -359,6 +365,14 @@ final class WebSocketTransport {
             Log.d(SdkConstants.TAG, "Unknown binary video sender. c_uuid=" + frameCUuid);
             return;
         }
+        storeRemoteSingleH264Packet(
+                participantId,
+                encodedData,
+                imageFormat,
+                width,
+                height,
+                frameRateFps,
+                sequence);
         if (listener != null) {
             listener.onRemoteVideoFrame(new RemoteVideoFrame(
                     participantId,
@@ -369,6 +383,31 @@ final class WebSocketTransport {
                     timestampMs,
                     sequence));
         }
+    }
+
+    private void storeRemoteSingleH264Packet(
+            String participantId,
+            byte[] encodedData,
+            WebStreamCallOptions.ImageFormat imageFormat,
+            int width,
+            int height,
+            int frameRateFps,
+            long sequence) {
+        if (remoteSinglePacketStoreCount >= 10
+                || imageFormat != WebStreamCallOptions.ImageFormat.H264
+                || applicationContext == null) {
+            return;
+        }
+        remoteSinglePacketStoreCount += 1;
+        SingleH264PacketMp4Store.save(
+                applicationContext,
+                participantId,
+                encodedData,
+                width,
+                height,
+                frameRateFps,
+                sequence,
+                "rp");
     }
 
     private void handleRemoteMediaState(JSONObject message) {
