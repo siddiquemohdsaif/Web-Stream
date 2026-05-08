@@ -3,6 +3,7 @@ package com.w3n.webstream;
 import android.graphics.Bitmap;
 import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
+import android.media.MediaCodecList;
 import android.media.MediaFormat;
 import android.os.Bundle;
 import android.util.Log;
@@ -23,6 +24,7 @@ final class H264FrameBatchEncoder {
     private final MediaCodec.BufferInfo bufferInfo = new MediaCodec.BufferInfo();
 
     private MediaCodec encoder;
+    private int colorFormat;
     private byte[] codecConfig;
     private int framesInBatch;
     private boolean released;
@@ -56,7 +58,7 @@ final class H264FrameBatchEncoder {
             return null;
         }
         inputBuffer.clear();
-        byte[] yuv = toI420(bitmap, width, height);
+        byte[] yuv = toYuv420(bitmap, width, height, colorFormat);
         if (yuv.length > inputBuffer.remaining()) {
             throw new IllegalStateException("H.264 encoder input buffer is too small.");
         }
@@ -100,17 +102,58 @@ final class H264FrameBatchEncoder {
     }
 
     private void startEncoder() throws IOException {
+        EncoderSelection selection = selectAvcEncoder();
+        MediaCodecInfo codecInfo = selection.codecInfo;
+        colorFormat = selection.colorFormat;
+
         MediaFormat format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height);
-        format.setInteger(
-                MediaFormat.KEY_COLOR_FORMAT,
-                MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible);
+        format.setInteger(MediaFormat.KEY_COLOR_FORMAT, colorFormat);
         format.setInteger(MediaFormat.KEY_BIT_RATE, bitrateKbps * 1000);
         format.setInteger(MediaFormat.KEY_FRAME_RATE, frameRateFps);
         format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1);
         format.setInteger(MediaFormat.KEY_PREPEND_HEADER_TO_SYNC_FRAMES, 1);
-        encoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_VIDEO_AVC);
+        encoder = MediaCodec.createByCodecName(codecInfo.getName());
         encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
         encoder.start();
+    }
+
+    private EncoderSelection selectAvcEncoder() throws IOException {
+        MediaCodecList codecList = new MediaCodecList(MediaCodecList.REGULAR_CODECS);
+        for (MediaCodecInfo codecInfo : codecList.getCodecInfos()) {
+            if (!codecInfo.isEncoder()) {
+                continue;
+            }
+            for (String type : codecInfo.getSupportedTypes()) {
+                if (MediaFormat.MIMETYPE_VIDEO_AVC.equalsIgnoreCase(type)) {
+                    int supportedColorFormat = selectColorFormat(codecInfo);
+                    if (supportedColorFormat != 0) {
+                        return new EncoderSelection(codecInfo, supportedColorFormat);
+                    }
+                }
+            }
+        }
+        throw new IOException("No H.264 encoder with a supported YUV420 color format is available.");
+    }
+
+    private int selectColorFormat(MediaCodecInfo codecInfo) {
+        MediaCodecInfo.CodecCapabilities capabilities =
+                codecInfo.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC);
+        int[] preferredFormats = new int[] {
+                MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420SemiPlanar,
+                MediaCodecInfo.CodecCapabilities.COLOR_TI_FormatYUV420PackedSemiPlanar,
+                MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420PackedSemiPlanar,
+                MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Planar,
+                MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420PackedPlanar,
+                MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible
+        };
+        for (int preferredFormat : preferredFormats) {
+            for (int supportedFormat : capabilities.colorFormats) {
+                if (supportedFormat == preferredFormat) {
+                    return preferredFormat;
+                }
+            }
+        }
+        return 0;
     }
 
     private void requestKeyFrame() {
@@ -251,13 +294,15 @@ final class H264FrameBatchEncoder {
         return data[start + 2] == 1 ? 3 : 4;
     }
 
-    private byte[] toI420(Bitmap bitmap, int targetWidth, int targetHeight) {
+    private byte[] toYuv420(Bitmap bitmap, int targetWidth, int targetHeight, int outputColorFormat) {
         int[] argb = new int[targetWidth * targetHeight];
         bitmap.getPixels(argb, 0, targetWidth, 0, 0, targetWidth, targetHeight);
         byte[] yuv = new byte[targetWidth * targetHeight * 3 / 2];
         int yIndex = 0;
-        int uIndex = targetWidth * targetHeight;
+        int chromaIndex = targetWidth * targetHeight;
+        int uIndex = chromaIndex;
         int vIndex = uIndex + ((targetWidth * targetHeight) / 4);
+        boolean semiPlanar = isSemiPlanar(outputColorFormat);
 
         for (int y = 0; y < targetHeight; y++) {
             for (int x = 0; x < targetWidth; x++) {
@@ -272,15 +317,36 @@ final class H264FrameBatchEncoder {
                 yuv[yIndex++] = (byte) clampByte(yValue);
 
                 if ((y & 1) == 0 && (x & 1) == 0) {
-                    yuv[uIndex++] = (byte) clampByte(uValue);
-                    yuv[vIndex++] = (byte) clampByte(vValue);
+                    if (semiPlanar) {
+                        yuv[chromaIndex++] = (byte) clampByte(uValue);
+                        yuv[chromaIndex++] = (byte) clampByte(vValue);
+                    } else {
+                        yuv[uIndex++] = (byte) clampByte(uValue);
+                        yuv[vIndex++] = (byte) clampByte(vValue);
+                    }
                 }
             }
         }
         return yuv;
     }
 
+    private boolean isSemiPlanar(int outputColorFormat) {
+        return outputColorFormat == MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420SemiPlanar
+                || outputColorFormat == MediaCodecInfo.CodecCapabilities.COLOR_TI_FormatYUV420PackedSemiPlanar
+                || outputColorFormat == MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420PackedSemiPlanar;
+    }
+
     private int clampByte(int value) {
         return Math.max(0, Math.min(255, value));
+    }
+
+    private static final class EncoderSelection {
+        final MediaCodecInfo codecInfo;
+        final int colorFormat;
+
+        EncoderSelection(MediaCodecInfo codecInfo, int colorFormat) {
+            this.codecInfo = codecInfo;
+            this.colorFormat = colorFormat;
+        }
     }
 }
