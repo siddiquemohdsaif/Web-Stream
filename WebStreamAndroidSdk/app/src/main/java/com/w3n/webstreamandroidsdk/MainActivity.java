@@ -25,5 +25,9 @@ public class MainActivity extends AppCompatActivity {
         Button joinCallButton = findViewById(R.id.joinCallButton);
         joinCallButton.setOnClickListener(v ->
                 startActivity(new Intent(MainActivity.this, JoinCallActivity.class)));
+
+        Button cameraRecordingButton = findViewById(R.id.cameraRecordingButton);
+        cameraRecordingButton.setOnClickListener(v ->
+                startActivity(new Intent(MainActivity.this, CameraRecordingActivity.class)));
     }
 }
