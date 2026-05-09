@@ -12,11 +12,13 @@ import android.os.HandlerThread;
 import android.util.Log;
 
 import java.io.ByteArrayOutputStream;
-import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Queue;
 
 public final class H264FrameBatchDecoder {
@@ -33,6 +35,18 @@ public final class H264FrameBatchDecoder {
          * fps = 15 means this callback fires every ~66.7 ms if decoded frames are available.
          */
         void onImageAvailable(DecodedFrame frame);
+
+        /**
+         * Raw MediaCodec decode time.
+         *
+         * Measures:
+         * queueInputBuffer(...)
+         *      ->
+         * dequeueOutputBuffer(...) returns decoded output
+         */
+        void onRawMediaCodecDecodeTimingAvailable(
+                long frameSequence,
+                long decodeDurationNs);
 
         default void onDecoderStarted() {
         }
@@ -143,6 +157,17 @@ public final class H264FrameBatchDecoder {
     private final MediaCodec.BufferInfo bufferInfo = new MediaCodec.BufferInfo();
     private final Queue<DecodedFrame> decodedFrameQueue = new ArrayDeque<>();
 
+    /**
+     * Stores raw MediaCodec decode start time for each queued input buffer.
+     *
+     * Key:
+     * presentationTimeUs passed into queueInputBuffer(...)
+     *
+     * Value:
+     * System.nanoTime() immediately before queueInputBuffer(...)
+     */
+    private final Map<Long, Long> rawDecodeStartTimeByPresentationUs = new HashMap<>();
+
     private HandlerThread decoderThread;
     private Handler decoderHandler;
 
@@ -251,9 +276,11 @@ public final class H264FrameBatchDecoder {
                     config.width,
                     config.height
             );
+
             format.setInteger(
                     MediaFormat.KEY_COLOR_FORMAT,
-                    MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible);
+                    MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible
+            );
 
             decoder.configure(
                     format,
@@ -270,6 +297,10 @@ public final class H264FrameBatchDecoder {
 
             synchronized (this) {
                 decodedFrameQueue.clear();
+            }
+
+            synchronized (rawDecodeStartTimeByPresentationUs) {
+                rawDecodeStartTimeByPresentationUs.clear();
             }
 
             started = true;
@@ -345,6 +376,10 @@ public final class H264FrameBatchDecoder {
 
             synchronized (this) {
                 decodedFrameQueue.clear();
+            }
+
+            synchronized (rawDecodeStartTimeByPresentationUs) {
+                rawDecodeStartTimeByPresentationUs.clear();
             }
 
             initialized = false;
@@ -431,6 +466,20 @@ public final class H264FrameBatchDecoder {
             inputBuffer.put(encodedChunk);
 
             long presentationTimeUs = System.nanoTime() / 1000L;
+
+            /**
+             * Raw MediaCodec decode start time.
+             *
+             * This is captured immediately before queueInputBuffer().
+             */
+            long rawDecodeStartNs = System.nanoTime();
+
+            synchronized (rawDecodeStartTimeByPresentationUs) {
+                rawDecodeStartTimeByPresentationUs.put(
+                        presentationTimeUs,
+                        rawDecodeStartNs
+                );
+            }
 
             decoder.queueInputBuffer(
                     inputIndex,
@@ -528,7 +577,8 @@ public final class H264FrameBatchDecoder {
                     start,
                     nextStart,
                     nalHeaderIndex,
-                    data[nalHeaderIndex] & 0x1f));
+                    data[nalHeaderIndex] & 0x1f
+            ));
         }
 
         return nalUnits;
@@ -554,6 +604,13 @@ public final class H264FrameBatchDecoder {
         while (true) {
             int outputIndex = decoder.dequeueOutputBuffer(bufferInfo, DEQUEUE_TIMEOUT_US);
 
+            /**
+             * Capture end time immediately after dequeueOutputBuffer returns.
+             *
+             * If outputIndex >= 0, MediaCodec has produced decoded output.
+             */
+            long rawDecodeEndNs = System.nanoTime();
+
             if (outputIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
                 return;
             }
@@ -573,6 +630,33 @@ public final class H264FrameBatchDecoder {
             }
 
             if (bufferInfo.size > 0) {
+                Long rawDecodeStartNs;
+
+                synchronized (rawDecodeStartTimeByPresentationUs) {
+                    rawDecodeStartNs = rawDecodeStartTimeByPresentationUs.remove(
+                            bufferInfo.presentationTimeUs
+                    );
+                }
+
+                if (rawDecodeStartNs != null) {
+                    long rawDecodeDurationNs = rawDecodeEndNs - rawDecodeStartNs;
+
+                    callback.onRawMediaCodecDecodeTimingAvailable(
+                            decodedFrameSequence + 1,
+                            rawDecodeDurationNs
+                    );
+
+                    Log.d(TAG,
+                            "Raw MediaCodec decode timing. presentationTimeUs="
+                                    + bufferInfo.presentationTimeUs
+                                    + ", durationMs="
+                                    + String.format(
+                                    Locale.US,
+                                    "%.3f",
+                                    rawDecodeDurationNs / 1_000_000.0
+                            ));
+                }
+
                 ByteBuffer outputBuffer = decoder.getOutputBuffer(outputIndex);
                 if (outputBuffer != null) {
                     MediaFormat frameFormat = decoder.getOutputFormat(outputIndex);

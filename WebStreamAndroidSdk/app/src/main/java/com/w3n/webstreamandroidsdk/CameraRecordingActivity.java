@@ -4,6 +4,8 @@ import android.Manifest;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.Log;
 import android.widget.Button;
 import android.widget.ImageView;
@@ -22,18 +24,21 @@ import com.w3n.webstream.Util.CameraController;
 import com.w3n.webstream.Util.H264FrameBatchDecoder;
 import com.w3n.webstream.Util.H264FrameBatchEncoder;
 
+import java.util.ArrayDeque;
 import java.util.Locale;
+import java.util.Queue;
 
 public class CameraRecordingActivity extends AppCompatActivity {
     private static final String TAG = "CameraRecordingActivity";
     private static final int REQUEST_CAMERA_PERMISSION = 1001;
     private static final int VIDEO_WIDTH = 640;
     private static final int VIDEO_HEIGHT = 480;
-    private static final int FRAME_RATE_FPS = 30;
+    private static final int FRAME_RATE_FPS = 60;
     private static final int BATCH_FRAME_COUNT = 5;
 
     private TextView statusText;
     private TextView detailsText;
+    private TextView elapsedTimeText;
     private ImageView decodedPreviewImage;
     private Button encodeButton;
     private Button decodeButton;
@@ -46,8 +51,31 @@ public class CameraRecordingActivity extends AppCompatActivity {
     private long encodedBatches;
     private long encodedBytes;
     private long decodedFrames;
+
     private long totalEncodeFrameCallTimeNs;
     private long totalBatchEncodeTimeNs;
+
+    private long decodedBatches;
+    private long totalBatchDecodeTimeNs;
+
+    private long rawDecodedFrames;
+    private long totalRawMediaCodecDecodeTimeNs;
+
+    private long encodingStartTimeMs;
+    private final Handler elapsedTimeHandler = new Handler(Looper.getMainLooper());
+
+    private final Runnable elapsedTimeRunnable = new Runnable() {
+        @Override
+        public void run() {
+            updateElapsedTime();
+
+            if (encoding) {
+                elapsedTimeHandler.postDelayed(this, 1000L);
+            }
+        }
+    };
+
+    private final Queue<DecodeBatchTiming> pendingDecodeBatches = new ArrayDeque<>();
 
     private boolean encoding;
     private boolean decoding;
@@ -70,6 +98,7 @@ public class CameraRecordingActivity extends AppCompatActivity {
 
         statusText = findViewById(R.id.recordingStatusText);
         detailsText = findViewById(R.id.recordingDetailsText);
+        elapsedTimeText = findViewById(R.id.elapsedTimeText);
         decodedPreviewImage = findViewById(R.id.decodedPreviewImage);
         encodeButton = findViewById(R.id.encodeButton);
         decodeButton = findViewById(R.id.decodeButton);
@@ -92,6 +121,7 @@ public class CameraRecordingActivity extends AppCompatActivity {
 
         updateControls();
         updateDetails();
+        resetElapsedTimer();
     }
 
     private void startEncodingWithPermission() {
@@ -139,6 +169,8 @@ public class CameraRecordingActivity extends AppCompatActivity {
             cameraController.start();
 
             encoding = true;
+            startElapsedTimer();
+
             showStatus("Encoding camera frames and rendering decoded output...");
             updateControls();
         } catch (Exception error) {
@@ -198,6 +230,13 @@ public class CameraRecordingActivity extends AppCompatActivity {
                                     + ", timestampMs=" + timestampMs);
 
                     if (decoder != null && decoder.isStarted()) {
+                        synchronized (pendingDecodeBatches) {
+                            pendingDecodeBatches.offer(new DecodeBatchTiming(
+                                    batchSequence,
+                                    BATCH_FRAME_COUNT,
+                                    System.nanoTime()));
+                        }
+
                         decoder.onDecodeChunk(encodedBatch);
                     }
 
@@ -263,6 +302,9 @@ public class CameraRecordingActivity extends AppCompatActivity {
                 @Override
                 public void onImageAvailable(H264FrameBatchDecoder.DecodedFrame frame) {
                     decodedFrames = frame.sequence;
+
+                    recordDecodedFrameForBatchTiming();
+
                     Bitmap bitmap = frame.bitmap;
 
                     Log.d(TAG,
@@ -270,7 +312,8 @@ public class CameraRecordingActivity extends AppCompatActivity {
                                     + frame.sequence
                                     + ", width=" + frame.width
                                     + ", height=" + frame.height
-                                    + ", timestampNs=" + frame.timestampNs);
+                                    + ", timestampNs=" + frame.timestampNs
+                                    + ", decodedBatches=" + decodedBatches);
 
                     runOnUiThread(() -> {
                         if (bitmap != null) {
@@ -278,6 +321,22 @@ public class CameraRecordingActivity extends AppCompatActivity {
                         }
                         updateDetails();
                     });
+                }
+
+                @Override
+                public void onRawMediaCodecDecodeTimingAvailable(
+                        long frameSequence,
+                        long decodeDurationNs) {
+                    rawDecodedFrames++;
+                    totalRawMediaCodecDecodeTimeNs += decodeDurationNs;
+
+                    Log.d(TAG,
+                            "Raw MediaCodec frame decoded. frameSequence="
+                                    + frameSequence
+                                    + ", durationMs="
+                                    + String.format(Locale.US, "%.3f", decodeDurationNs / 1_000_000.0));
+
+                    runOnUiThread(CameraRecordingActivity.this::updateDetails);
                 }
 
                 @Override
@@ -310,6 +369,8 @@ public class CameraRecordingActivity extends AppCompatActivity {
         }
 
         encoding = false;
+        stopElapsedTimer();
+
         showStatus("Encoding stopped.");
         updateControls();
         updateDetails();
@@ -332,8 +393,110 @@ public class CameraRecordingActivity extends AppCompatActivity {
         encodedBatches = 0L;
         encodedBytes = 0L;
         decodedFrames = 0L;
+
         totalEncodeFrameCallTimeNs = 0L;
         totalBatchEncodeTimeNs = 0L;
+
+        decodedBatches = 0L;
+        totalBatchDecodeTimeNs = 0L;
+
+        rawDecodedFrames = 0L;
+        totalRawMediaCodecDecodeTimeNs = 0L;
+
+        synchronized (pendingDecodeBatches) {
+            pendingDecodeBatches.clear();
+        }
+
+        resetElapsedTimer();
+    }
+
+    private void startElapsedTimer() {
+        encodingStartTimeMs = System.currentTimeMillis();
+
+        elapsedTimeHandler.removeCallbacks(elapsedTimeRunnable);
+        updateElapsedTime();
+        elapsedTimeHandler.postDelayed(elapsedTimeRunnable, 1000L);
+    }
+
+    private void stopElapsedTimer() {
+        elapsedTimeHandler.removeCallbacks(elapsedTimeRunnable);
+        updateElapsedTime();
+    }
+
+    private void resetElapsedTimer() {
+        encodingStartTimeMs = 0L;
+
+        if (elapsedTimeText != null) {
+            elapsedTimeText.setText("Elapsed time: 00:00");
+        }
+    }
+
+    private void updateElapsedTime() {
+        if (elapsedTimeText == null) {
+            return;
+        }
+
+        if (encodingStartTimeMs <= 0L) {
+            elapsedTimeText.setText("Elapsed time: 00:00");
+            return;
+        }
+
+        long elapsedMs = System.currentTimeMillis() - encodingStartTimeMs;
+        long totalSeconds = elapsedMs / 1000L;
+
+        long hours = totalSeconds / 3600L;
+        long minutes = (totalSeconds % 3600L) / 60L;
+        long seconds = totalSeconds % 60L;
+
+        if (hours > 0) {
+            elapsedTimeText.setText(String.format(
+                    Locale.US,
+                    "Elapsed time: %02d:%02d:%02d",
+                    hours,
+                    minutes,
+                    seconds
+            ));
+        } else {
+            elapsedTimeText.setText(String.format(
+                    Locale.US,
+                    "Elapsed time: %02d:%02d",
+                    minutes,
+                    seconds
+            ));
+        }
+    }
+
+    private void recordDecodedFrameForBatchTiming() {
+        DecodeBatchTiming completedBatch = null;
+
+        synchronized (pendingDecodeBatches) {
+            DecodeBatchTiming currentBatch = pendingDecodeBatches.peek();
+            if (currentBatch == null) {
+                return;
+            }
+
+            currentBatch.decodedFrames++;
+
+            if (currentBatch.decodedFrames >= currentBatch.expectedFrames) {
+                pendingDecodeBatches.poll();
+                completedBatch = currentBatch;
+            }
+        }
+
+        if (completedBatch == null) {
+            return;
+        }
+
+        long batchDecodeDurationNs = System.nanoTime() - completedBatch.startTimeNs;
+        decodedBatches++;
+        totalBatchDecodeTimeNs += batchDecodeDurationNs;
+
+        Log.d(TAG,
+                "H.264 batch decoded end-to-end. batchSequence="
+                        + completedBatch.batchSequence
+                        + ", frameCount=" + completedBatch.decodedFrames
+                        + ", durationMs="
+                        + String.format(Locale.US, "%.3f", batchDecodeDurationNs / 1_000_000.0));
     }
 
     private void updateControls() {
@@ -345,16 +508,33 @@ public class CameraRecordingActivity extends AppCompatActivity {
     private void updateDetails() {
         detailsText.setText(String.format(
                 Locale.US,
-                "Camera frames: %d\nEncoded batches: %d\nEncoded bytes: %.2f KB\nDecoded frames: %d\nAvg encode call: %.3f ms\nAvg batch encode: %.3f ms",
+                "Camera frames: %d\n" +
+                        "Encoded batches: %d\n" +
+                        "Encoded bytes: %.2f KB\n" +
+                        "Decoded frames: %d\n" +
+                        "Decoded batches: %d\n" +
+                        "Raw decoded frames: %d\n" +
+                        "Avg encode call: %.3f ms\n" +
+                        "Avg batch encode: %.3f ms\n" +
+                        "Avg batch decode end-to-end: %.3f ms\n" +
+                        "Avg raw MediaCodec decode: %.3f ms",
                 cameraFrames,
                 encodedBatches,
                 encodedBytes / 1024.0,
                 decodedFrames,
+                decodedBatches,
+                rawDecodedFrames,
                 cameraFrames > 0
                         ? totalEncodeFrameCallTimeNs / 1_000_000.0 / cameraFrames
                         : 0.0,
                 encodedBatches > 0
                         ? totalBatchEncodeTimeNs / 1_000_000.0 / encodedBatches
+                        : 0.0,
+                decodedBatches > 0
+                        ? totalBatchDecodeTimeNs / 1_000_000.0 / decodedBatches
+                        : 0.0,
+                rawDecodedFrames > 0
+                        ? totalRawMediaCodecDecodeTimeNs / 1_000_000.0 / rawDecodedFrames
                         : 0.0));
     }
 
@@ -384,8 +564,25 @@ public class CameraRecordingActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        elapsedTimeHandler.removeCallbacks(elapsedTimeRunnable);
         stopEncoding();
         stopDecoder();
         super.onDestroy();
+    }
+
+    private static final class DecodeBatchTiming {
+        final long batchSequence;
+        final int expectedFrames;
+        final long startTimeNs;
+        int decodedFrames;
+
+        DecodeBatchTiming(
+                long batchSequence,
+                int expectedFrames,
+                long startTimeNs) {
+            this.batchSequence = batchSequence;
+            this.expectedFrames = expectedFrames;
+            this.startTimeNs = startTimeNs;
+        }
     }
 }
