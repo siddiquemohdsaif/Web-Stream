@@ -72,7 +72,7 @@ public final class CameraController {
             private int frameRateFps = 30;
             private FrameType frameType = FrameType.IMAGE_READER_YUV;
             private CameraFacing cameraFacing = CameraFacing.FRONT;
-            private int imageReaderMaxImages = 2;
+            private int imageReaderMaxImages = 8;
             private int jpegQuality = 80;
 
             public Builder setSize(int width, int height) {
@@ -464,44 +464,10 @@ public final class CameraController {
         Image image = null;
 
         try {
-            image = reader.acquireLatestImage();
-            if (image == null) {
-                return;
-            }
-
-            long currentSequence = ++sequence;
-            long timestampNs = image.getTimestamp();
-
-            if (config.frameType == FrameType.IMAGE_READER_YUV) {
-                byte[] yuvData = imageToNv21(image);
-
-                CameraFrame frame = CameraFrame.yuv(
-                        image.getWidth(),
-                        image.getHeight(),
-                        timestampNs,
-                        currentSequence,
-                        yuvData);
-
-                callback.onImageFrameAvailable(frame);
-                return;
-            }
-
-            if (config.frameType == FrameType.BITMAP) {
-                byte[] nv21 = imageToNv21(image);
-                Bitmap bitmap = nv21ToBitmap(
-                        nv21,
-                        image.getWidth(),
-                        image.getHeight(),
-                        config.jpegQuality);
-
-                CameraFrame frame = CameraFrame.bitmap(
-                        image.getWidth(),
-                        image.getHeight(),
-                        timestampNs,
-                        currentSequence,
-                        bitmap);
-
-                callback.onImageFrameAvailable(frame);
+            while ((image = reader.acquireNextImage()) != null) {
+                processImage(image);
+                image.close();
+                image = null;
             }
 
         } catch (Exception error) {
@@ -510,6 +476,43 @@ public final class CameraController {
             if (image != null) {
                 image.close();
             }
+        }
+    }
+
+    private void processImage(Image image) {
+        long currentSequence = ++sequence;
+        long timestampNs = image.getTimestamp();
+
+        if (config.frameType == FrameType.IMAGE_READER_YUV) {
+            byte[] yuvData = imageToNv21(image);
+
+            CameraFrame frame = CameraFrame.yuv(
+                    image.getWidth(),
+                    image.getHeight(),
+                    timestampNs,
+                    currentSequence,
+                    yuvData);
+
+            callback.onImageFrameAvailable(frame);
+            return;
+        }
+
+        if (config.frameType == FrameType.BITMAP) {
+            byte[] nv21 = imageToNv21(image);
+            Bitmap bitmap = nv21ToBitmap(
+                    nv21,
+                    image.getWidth(),
+                    image.getHeight(),
+                    config.jpegQuality);
+
+            CameraFrame frame = CameraFrame.bitmap(
+                    image.getWidth(),
+                    image.getHeight(),
+                    timestampNs,
+                    currentSequence,
+                    bitmap);
+
+            callback.onImageFrameAvailable(frame);
         }
     }
 
@@ -551,22 +554,42 @@ public final class CameraController {
                 return new Range<>(config.frameRateFps, config.frameRateFps);
             }
 
-            Range<Integer> bestRange = ranges[0];
             int requested = config.frameRateFps;
+            Range<Integer> bestRange = null;
 
             for (Range<Integer> range : ranges) {
+                if (range.getLower() == requested && range.getUpper() == requested) {
+                    return range;
+                }
+
                 if (range.getLower() <= requested && range.getUpper() >= requested) {
-                    if (range.getUpper() < bestRange.getUpper()
-                            || bestRange.getUpper() < requested) {
+                    if (bestRange == null || isBetterFpsRange(range, bestRange, requested)) {
                         bestRange = range;
                     }
                 }
             }
 
-            return bestRange;
+            return bestRange != null ? bestRange : ranges[0];
         } catch (Exception ignored) {
             return new Range<>(config.frameRateFps, config.frameRateFps);
         }
+    }
+
+    private boolean isBetterFpsRange(
+            Range<Integer> candidate,
+            Range<Integer> current,
+            int requested) {
+        int candidateUpperDistance = Math.abs(candidate.getUpper() - requested);
+        int currentUpperDistance = Math.abs(current.getUpper() - requested);
+
+        if (candidateUpperDistance != currentUpperDistance) {
+            return candidateUpperDistance < currentUpperDistance;
+        }
+
+        int candidateLowerDistance = Math.abs(candidate.getLower() - requested);
+        int currentLowerDistance = Math.abs(current.getLower() - requested);
+
+        return candidateLowerDistance < currentLowerDistance;
     }
 
     private Handler getCameraHandler() {

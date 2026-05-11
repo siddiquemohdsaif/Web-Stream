@@ -48,6 +48,21 @@ public final class H264FrameBatchDecoder {
                 long frameSequence,
                 long decodeDurationNs);
 
+        default void onDecodeBatchHandled(
+                long batchSequence,
+                int accessUnitCount,
+                long handledDurationNs,
+                long decodedFrameCount,
+                int queuedDecodedFrameCount
+        ) {
+        }
+
+        default void onDecodedFrameDropped(
+                long frameSequence,
+                int queuedDecodedFrameCount
+        ) {
+        }
+
         default void onDecoderStarted() {
         }
 
@@ -65,6 +80,7 @@ public final class H264FrameBatchDecoder {
         public final BitmapType bitmapType;
         public final int imageReaderMaxImages;
         public final int jpegQuality;
+        public final int maxQueuedFrames;
 
         private Config(Builder builder) {
             this.width = builder.width;
@@ -75,6 +91,7 @@ public final class H264FrameBatchDecoder {
                     : builder.bitmapType;
             this.imageReaderMaxImages = Math.max(2, builder.imageReaderMaxImages);
             this.jpegQuality = Math.max(1, Math.min(100, builder.jpegQuality));
+            this.maxQueuedFrames = Math.max(1, builder.maxQueuedFrames);
         }
 
         public static final class Builder {
@@ -84,6 +101,7 @@ public final class H264FrameBatchDecoder {
             private BitmapType bitmapType = BitmapType.RGB_888;
             private int imageReaderMaxImages = 4;
             private int jpegQuality = 80;
+            private int maxQueuedFrames = 5;
 
             public Builder setSize(int width, int height) {
                 this.width = width;
@@ -110,6 +128,11 @@ public final class H264FrameBatchDecoder {
 
             public Builder setJpegQuality(int jpegQuality) {
                 this.jpegQuality = Math.max(1, Math.min(100, jpegQuality));
+                return this;
+            }
+
+            public Builder setMaxQueuedFrames(int maxQueuedFrames) {
+                this.maxQueuedFrames = Math.max(1, maxQueuedFrames);
                 return this;
             }
 
@@ -180,10 +203,16 @@ public final class H264FrameBatchDecoder {
     private long inputChunkSequence;
     private long decodedFrameSequence;
     private long renderedFrameSequence;
+    private long handledBatchSequence;
 
     private boolean initialized;
     private boolean started;
     private boolean released;
+
+
+    public static volatile long decoderFrameReceived =0;
+    public static volatile long dispatchedFrames =0 ;
+    public static volatile long imagesOnBuffer =0;
 
     private final Runnable renderRunnable = new Runnable() {
         @Override
@@ -202,6 +231,11 @@ public final class H264FrameBatchDecoder {
 
             if (frame != null) {
                 renderedFrameSequence++;
+
+                dispatchedFrames ++;
+                Log.d("DECODER_P", "run: decoderFrameReceived " +decoderFrameReceived+
+                        " dispatchedFrames " +dispatchedFrames+
+                        " imagesOnBuffer "+imagesOnBuffer);
                 callback.onImageAvailable(frame);
             }
 
@@ -294,9 +328,10 @@ public final class H264FrameBatchDecoder {
             inputChunkSequence = 0L;
             decodedFrameSequence = 0L;
             renderedFrameSequence = 0L;
+            handledBatchSequence = 0L;
 
             synchronized (this) {
-                decodedFrameQueue.clear();
+                clearDecodedFrameQueue();
             }
 
             synchronized (rawDecodeStartTimeByPresentationUs) {
@@ -319,10 +354,11 @@ public final class H264FrameBatchDecoder {
      * Called from outside with encoder output.
      *
      * Example:
-     * Encoder gives 3 chunks per second.
+     * Encoder gives frameRateFps / batchFrameCount chunks per second.
      * Decoder accepts those chunks immediately, decodes all frames,
      * then emits decoded images at configured FPS.
      */
+    private static volatile long frameDecoded = 0;
     public void onDecodeChunk(byte[] encodedChunk) {
         if (released || !started || decoder == null) {
             return;
@@ -332,14 +368,53 @@ public final class H264FrameBatchDecoder {
             return;
         }
 
+        decoderFrameReceived += 5;
+
         Handler handler = getDecoderHandler();
 
         handler.post(() -> {
+            long batchStartNs = System.nanoTime();
             List<byte[]> accessUnits = splitAnnexBAccessUnits(encodedChunk);
 
             for (byte[] accessUnit : accessUnits) {
                 decodeChunkInternal(accessUnit);
             }
+
+            frameDecoded = 0;
+            drainDecoder();
+            Log.d("DECODER_P", "onDecodeChunk: frameDecoded "+ frameDecoded);
+            frameDecoded = 0;
+
+            long handledDurationNs = System.nanoTime() - batchStartNs;
+            long batchSequence = ++handledBatchSequence;
+            int queuedDecodedFrameCount;
+            long decodedFrameCount;
+
+            synchronized (H264FrameBatchDecoder.this) {
+                queuedDecodedFrameCount = decodedFrameQueue.size();
+                decodedFrameCount = decodedFrameSequence;
+            }
+
+            Log.d(TAG,
+                    "H.264 decode batch handled. batchSequence="
+                            + batchSequence
+                            + ", accessUnits=" + accessUnits.size()
+                            + ", durationMs="
+                            + String.format(
+                            Locale.US,
+                            "%.3f",
+                            handledDurationNs / 1_000_000.0
+                    )
+                            + ", decodedFrames=" + decodedFrameCount
+                            + ", queuedDecodedFrames=" + queuedDecodedFrameCount);
+
+            callback.onDecodeBatchHandled(
+                    batchSequence,
+                    accessUnits.size(),
+                    handledDurationNs,
+                    decodedFrameCount,
+                    queuedDecodedFrameCount
+            );
         });
     }
 
@@ -375,7 +450,7 @@ public final class H264FrameBatchDecoder {
             }
 
             synchronized (this) {
-                decodedFrameQueue.clear();
+                clearDecodedFrameQueue();
             }
 
             synchronized (rawDecodeStartTimeByPresentationUs) {
@@ -610,6 +685,9 @@ public final class H264FrameBatchDecoder {
              * If outputIndex >= 0, MediaCodec has produced decoded output.
              */
             long rawDecodeEndNs = System.nanoTime();
+            long h264DecodeStart = System.currentTimeMillis();
+            long rawDecodeStart = System.currentTimeMillis();
+
 
             if (outputIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
                 return;
@@ -663,15 +741,19 @@ public final class H264FrameBatchDecoder {
                     if (frameFormat == null) {
                         frameFormat = outputFormat;
                     }
-
+                    long h264DecodeEnd = System.currentTimeMillis();
+                    Log.d("DECODER_S", "drainDecoder:time taken for h264 decode  "+(h264DecodeEnd-h264DecodeStart));
                     queueDecodedBuffer(outputBuffer, frameFormat);
                 }
             }
 
+            long decoderReleaseStart = System.currentTimeMillis();
             decoder.releaseOutputBuffer(
                     outputIndex,
                     false
             );
+            Log.d("DECODER_S", "drainDecoder: decoder ReleaseTime "+(System.currentTimeMillis() - decoderReleaseStart));
+            Log.d("DECODER_S", "drainDecoder: Drain decoder Time "+(System.currentTimeMillis() - rawDecodeStart));
         }
     }
 
@@ -679,6 +761,7 @@ public final class H264FrameBatchDecoder {
             ByteBuffer outputBuffer,
             MediaFormat frameFormat) {
         try {
+            long nv21Start = System.currentTimeMillis();
             byte[] nv21 = codecOutputToNv21(outputBuffer, frameFormat);
 
             Bitmap bitmap = nv21ToBitmap(
@@ -695,13 +778,43 @@ public final class H264FrameBatchDecoder {
                     ++decodedFrameSequence,
                     bitmap
             );
+            long nv21End = System.currentTimeMillis();
+            Log.d("DECODER_S", "queueDecodedBuffer: time taken to convert nv21  "+(nv21End - nv21Start));
 
             synchronized (this) {
+                long imageOfferStart = System.currentTimeMillis();
+                while (decodedFrameQueue.size() >= config.maxQueuedFrames) {
+                    DecodedFrame droppedFrame = decodedFrameQueue.poll();
+                    if (droppedFrame == null) {
+                        break;
+                    }
+
+                    recycleFrameBitmap(droppedFrame);
+                    callback.onDecodedFrameDropped(
+                            droppedFrame.sequence,
+                            decodedFrameQueue.size());
+                }
+
+                frameDecoded ++ ;
+                imagesOnBuffer ++ ;
                 decodedFrameQueue.offer(frame);
+                Log.d("DECODER_S", "queueDecodedBuffer: ImageOffering time"+(System.currentTimeMillis() - imageOfferStart));
             }
 
         } catch (Exception error) {
             callback.onDecoderError(error);
+        }
+    }
+
+    private void recycleFrameBitmap(DecodedFrame frame) {
+        if (frame != null && frame.bitmap != null && !frame.bitmap.isRecycled()) {
+            frame.bitmap.recycle();
+        }
+    }
+
+    private void clearDecodedFrameQueue() {
+        while (!decodedFrameQueue.isEmpty()) {
+            recycleFrameBitmap(decodedFrameQueue.poll());
         }
     }
 
