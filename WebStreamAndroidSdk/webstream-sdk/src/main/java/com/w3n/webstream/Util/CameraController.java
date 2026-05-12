@@ -4,10 +4,7 @@ import android.Manifest;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
 import android.graphics.ImageFormat;
-import android.graphics.Rect;
-import android.graphics.YuvImage;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraCharacteristics;
@@ -18,11 +15,10 @@ import android.media.Image;
 import android.media.ImageReader;
 import android.os.Handler;
 import android.os.HandlerThread;
+import android.util.Log;
 import android.util.Range;
 import android.view.Surface;
 
-import java.io.ByteArrayOutputStream;
-import java.nio.ByteBuffer;
 import java.util.Collections;
 
 public final class CameraController {
@@ -34,7 +30,29 @@ public final class CameraController {
 
     public enum FrameType {
         IMAGE_READER_YUV,
+        IMAGE_READER_NV21,
+        IMAGE_READER_NV12,
         BITMAP
+    }
+
+    public enum YuvFormat {
+        I420,
+        NV21,
+        NV12
+    }
+
+    private static final String NATIVE_LIBRARY_NAME = "webstream_h264";
+    private static final boolean NATIVE_LIBRARY_LOADED;
+
+    static {
+        boolean loaded;
+        try {
+            System.loadLibrary(NATIVE_LIBRARY_NAME);
+            loaded = true;
+        } catch (UnsatisfiedLinkError ignored) {
+            loaded = false;
+        }
+        NATIVE_LIBRARY_LOADED = loaded;
     }
 
     public interface CameraCallback {
@@ -125,9 +143,10 @@ public final class CameraController {
         public final long timestampNs;
         public final long sequence;
         public final FrameType frameType;
+        public final YuvFormat yuvFormat;
 
         /**
-         * Available when frameType == IMAGE_READER_YUV.
+         * Available when frameType is an image-reader YUV mode.
          * This is copied data, so it is safe to use after Image.close().
          */
         public final byte[] yuv420Data;
@@ -143,6 +162,7 @@ public final class CameraController {
                 long timestampNs,
                 long sequence,
                 FrameType frameType,
+                YuvFormat yuvFormat,
                 byte[] yuv420Data,
                 Bitmap bitmap) {
             this.width = width;
@@ -150,6 +170,7 @@ public final class CameraController {
             this.timestampNs = timestampNs;
             this.sequence = sequence;
             this.frameType = frameType;
+            this.yuvFormat = yuvFormat;
             this.yuv420Data = yuv420Data;
             this.bitmap = bitmap;
         }
@@ -159,13 +180,16 @@ public final class CameraController {
                 int height,
                 long timestampNs,
                 long sequence,
+                FrameType frameType,
+                YuvFormat yuvFormat,
                 byte[] yuv420Data) {
             return new CameraFrame(
                     width,
                     height,
                     timestampNs,
                     sequence,
-                    FrameType.IMAGE_READER_YUV,
+                    frameType,
+                    yuvFormat,
                     yuv420Data,
                     null);
         }
@@ -182,6 +206,7 @@ public final class CameraController {
                     timestampNs,
                     sequence,
                     FrameType.BITMAP,
+                    null,
                     null,
                     bitmap);
         }
@@ -465,7 +490,9 @@ public final class CameraController {
 
         try {
             while ((image = reader.acquireNextImage()) != null) {
+                long st = System.currentTimeMillis();
                 processImage(image);
+                Log.d(TAG, "onImageAvailable: time taken :" + (System.currentTimeMillis()-st));
                 image.close();
                 image = null;
             }
@@ -480,38 +507,19 @@ public final class CameraController {
     }
 
     private void processImage(Image image) {
-        long currentSequence = ++sequence;
-        long timestampNs = image.getTimestamp();
-
-        if (config.frameType == FrameType.IMAGE_READER_YUV) {
-            byte[] yuvData = imageToNv21(image);
-
-            CameraFrame frame = CameraFrame.yuv(
-                    image.getWidth(),
-                    image.getHeight(),
-                    timestampNs,
-                    currentSequence,
-                    yuvData);
-
-            callback.onImageFrameAvailable(frame);
+        if (!NATIVE_LIBRARY_LOADED) {
+            callback.onCameraError(new IllegalStateException(
+                    "Native camera frame processor " + NATIVE_LIBRARY_NAME + " could not be loaded."));
             return;
         }
 
-        if (config.frameType == FrameType.BITMAP) {
-            byte[] nv21 = imageToNv21(image);
-            Bitmap bitmap = nv21ToBitmap(
-                    nv21,
-                    image.getWidth(),
-                    image.getHeight(),
-                    config.jpegQuality);
+        CameraFrame frame = nativeProcessImage(
+                image,
+                config.frameType,
+                ++sequence,
+                config.jpegQuality);
 
-            CameraFrame frame = CameraFrame.bitmap(
-                    image.getWidth(),
-                    image.getHeight(),
-                    timestampNs,
-                    currentSequence,
-                    bitmap);
-
+        if (frame != null) {
             callback.onImageFrameAvailable(frame);
         }
     }
@@ -616,86 +624,9 @@ public final class CameraController {
         }
     }
 
-    /**
-     * Converts Android ImageFormat.YUV_420_888 into NV21.
-     *
-     * NV21 layout:
-     *
-     * Y plane first, then interleaved VU.
-     */
-    private static byte[] imageToNv21(Image image) {
-        int width = image.getWidth();
-        int height = image.getHeight();
-
-        Image.Plane[] planes = image.getPlanes();
-
-        byte[] nv21 = new byte[width * height * 3 / 2];
-
-        ByteBuffer yBuffer = planes[0].getBuffer();
-        ByteBuffer uBuffer = planes[1].getBuffer();
-        ByteBuffer vBuffer = planes[2].getBuffer();
-
-        int yRowStride = planes[0].getRowStride();
-        int yPixelStride = planes[0].getPixelStride();
-
-        int uvRowStride = planes[1].getRowStride();
-        int uvPixelStride = planes[1].getPixelStride();
-
-        int position = 0;
-
-        for (int row = 0; row < height; row++) {
-            int yRowStart = row * yRowStride;
-
-            for (int col = 0; col < width; col++) {
-                nv21[position++] =
-                        yBuffer.get(yRowStart + col * yPixelStride);
-            }
-        }
-
-        int uvHeight = height / 2;
-        int uvWidth = width / 2;
-
-        for (int row = 0; row < uvHeight; row++) {
-            int uvRowStart = row * uvRowStride;
-
-            for (int col = 0; col < uvWidth; col++) {
-                int uvIndex = uvRowStart + col * uvPixelStride;
-
-                byte u = uBuffer.get(uvIndex);
-                byte v = vBuffer.get(uvIndex);
-
-                nv21[position++] = v;
-                nv21[position++] = u;
-            }
-        }
-
-        return nv21;
-    }
-
-    private static Bitmap nv21ToBitmap(
-            byte[] nv21,
-            int width,
-            int height,
-            int jpegQuality) {
-        YuvImage yuvImage = new YuvImage(
-                nv21,
-                ImageFormat.NV21,
-                width,
-                height,
-                null);
-
-        ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-
-        yuvImage.compressToJpeg(
-                new Rect(0, 0, width, height),
-                jpegQuality,
-                outputStream);
-
-        byte[] jpegBytes = outputStream.toByteArray();
-
-        return BitmapFactory.decodeByteArray(
-                jpegBytes,
-                0,
-                jpegBytes.length);
-    }
+    private static native CameraFrame nativeProcessImage(
+            Image image,
+            FrameType frameType,
+            long sequence,
+            int jpegQuality);
 }

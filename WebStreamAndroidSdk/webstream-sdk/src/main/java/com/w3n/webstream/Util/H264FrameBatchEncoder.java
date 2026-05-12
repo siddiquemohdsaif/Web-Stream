@@ -1,20 +1,26 @@
 package com.w3n.webstream.Util;
 
-import android.media.MediaCodec;
-import android.media.MediaCodecInfo;
-import android.media.MediaCodecList;
-import android.media.MediaFormat;
-import android.os.Bundle;
-import android.util.Log;
+import android.os.Handler;
+import android.os.HandlerThread;
+import android.os.Looper;
 
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.nio.ByteBuffer;
-import java.util.Locale;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicReference;
 
 public final class H264FrameBatchEncoder {
+    private static final String LIBRARY_NAME = "webstream_h264";
+    private static final boolean LIBRARY_LOADED;
 
-    private long encoderStartMs;
+    static {
+        boolean loaded;
+        try {
+            System.loadLibrary(LIBRARY_NAME);
+            loaded = true;
+        } catch (UnsatisfiedLinkError ignored) {
+            loaded = false;
+        }
+        LIBRARY_LOADED = loaded;
+    }
 
     public interface Callback {
         void onEncodedFrameBatchAvailable(
@@ -149,44 +155,15 @@ public final class H264FrameBatchEncoder {
         }
     }
 
-    private static final String TAG = "H264FrameBatchEncoder";
-
-    private static final int INPUT_DEQUEUE_TIMEOUT_US = 10_000;
-    private static final int OUTPUT_DEQUEUE_TIMEOUT_US = 10_000;
-    private static final long MAX_BATCH_OUTPUT_WAIT_NS = 2_000_000_000L;
-
     private final Config config;
     private final Callback callback;
 
-    private final ByteArrayOutputStream batchOutput = new ByteArrayOutputStream();
-    private final MediaCodec.BufferInfo bufferInfo = new MediaCodec.BufferInfo();
-
-    private MediaCodec encoder;
-    private int encoderColorFormat;
-    private byte[] codecConfig;
-
-    private int inputFramesInBatch;
-    private int encodedFramesInBatch;
-
-    private long batchSequence;
-    private long totalInputFrames;
-
-    /**
-     * This is the important changed field.
-     *
-     * It accumulates only active encode-path time for the current batch.
-     * It does NOT include idle time between camera frame arrivals.
-     */
-    private long currentBatchEncodeComputeTimeNs;
-
-    private long activeEncodeTimingStartNs;
-    private long encoderStartTimeNs;
-    private long lastEncodedTimestampMs;
-
-    private boolean initialized;
-    private boolean started;
-    private boolean released;
-    private boolean firstKeyFrameRequested;
+    private HandlerThread encoderThread;
+    private Handler encoderHandler;
+    private volatile long nativeHandle;
+    private volatile boolean initialized;
+    private volatile boolean started;
+    private volatile boolean released;
 
     public H264FrameBatchEncoder(Config config, Callback callback) {
         if (config == null) {
@@ -201,7 +178,7 @@ public final class H264FrameBatchEncoder {
         this.callback = callback;
     }
 
-    public synchronized void initialize() {
+    public void initialize() {
         if (released) {
             throw new IllegalStateException("Encoder is already released.");
         }
@@ -210,17 +187,44 @@ public final class H264FrameBatchEncoder {
             return;
         }
 
-        try {
-            EncoderSelection selection = selectAvcEncoder();
-            encoderColorFormat = selection.colorFormat;
-            encoder = MediaCodec.createByCodecName(selection.codecInfo.getName());
+        if (nativeHandle != 0L) {
             initialized = true;
-        } catch (Exception error) {
-            callback.onEncoderError(error);
+            return;
         }
+
+        if (!LIBRARY_LOADED) {
+            callback.onEncoderError(new IllegalStateException(
+                    "Native H.264 library " + LIBRARY_NAME + " could not be loaded."));
+            return;
+        }
+
+        runOnEncoderThreadBlocking(() -> {
+            if (nativeHandle != 0L) {
+                initialized = true;
+                return null;
+            }
+
+            try {
+                nativeHandle = nativeCreate(
+                        config.width,
+                        config.height,
+                        config.frameRateFps,
+                        config.bitrateKbps,
+                        config.batchFrameCount,
+                        config.iFrameIntervalSeconds,
+                        config.inputYuvFormat.ordinal(),
+                        config.enableBatchTimingLogs,
+                        config.requestKeyFrameAtStart,
+                        config.requestKeyFrameEveryBatch);
+                initialized = true;
+            } catch (Exception error) {
+                callback.onEncoderError(error);
+            }
+            return null;
+        });
     }
 
-    public synchronized void start() {
+    public void start() {
         if (released) {
             callback.onEncoderError(new IllegalStateException("Encoder is already released."));
             return;
@@ -234,55 +238,31 @@ public final class H264FrameBatchEncoder {
             initialize();
         }
 
-        if (encoder == null) {
+        if (nativeHandle == 0L) {
             callback.onEncoderError(new IllegalStateException("Encoder initialization failed."));
             return;
         }
 
-        try {
-            MediaFormat format = MediaFormat.createVideoFormat(
-                    MediaFormat.MIMETYPE_VIDEO_AVC,
-                    config.width,
-                    config.height
-            );
-
-            format.setInteger(MediaFormat.KEY_COLOR_FORMAT, encoderColorFormat);
-            format.setInteger(MediaFormat.KEY_BIT_RATE, config.bitrateKbps * 1000);
-            format.setInteger(MediaFormat.KEY_FRAME_RATE, config.frameRateFps);
-            format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, config.iFrameIntervalSeconds);
-
-            try {
-                format.setInteger(MediaFormat.KEY_PREPEND_HEADER_TO_SYNC_FRAMES, 1);
-            } catch (RuntimeException ignored) {
+        runOnEncoderThreadBlocking(() -> {
+            if (released || nativeHandle == 0L || started) {
+                return null;
             }
 
-            encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
-            encoder.start();
-
-            inputFramesInBatch = 0;
-            encodedFramesInBatch = 0;
-            batchSequence = 0;
-            totalInputFrames = 0;
-
-            currentBatchEncodeComputeTimeNs = 0L;
-            activeEncodeTimingStartNs = 0L;
-            encoderStartTimeNs = System.nanoTime();
-            lastEncodedTimestampMs = 0L;
-
-            codecConfig = null;
-            firstKeyFrameRequested = false;
-            batchOutput.reset();
-
-            started = true;
-            callback.onEncoderStarted();
-
-        } catch (Exception error) {
-            callback.onEncoderError(error);
-        }
+            try {
+                if (!nativeIsStarted(nativeHandle)) {
+                    nativeStart(nativeHandle);
+                }
+                started = true;
+                callback.onEncoderStarted();
+            } catch (Exception error) {
+                callback.onEncoderError(error);
+            }
+            return null;
+        });
     }
 
-    public synchronized void encodeFrame(byte[] inputYuvData, long timestampMs) {
-        if (released || !started || encoder == null) {
+    public void encodeFrame(byte[] inputYuvData, long timestampMs) {
+        if (released || !started || nativeHandle == 0L) {
             return;
         }
 
@@ -290,738 +270,266 @@ public final class H264FrameBatchEncoder {
             return;
         }
 
-        encoderStartMs = System.currentTimeMillis();
-        int expectedSize = getExpectedYuvSize();
-        if (inputYuvData.length < expectedSize) {
-            callback.onEncoderError(new IllegalArgumentException(
-                    "Invalid YUV frame size. Expected at least "
-                            + expectedSize + " bytes, got " + inputYuvData.length
-            ));
-            return;
-        }
+        byte[] frameData = inputYuvData;
 
-        try {
-            startBatchIfNeeded();
-            beginEncodeTiming();
-
-            if (config.requestKeyFrameAtStart && !firstKeyFrameRequested) {
-                requestKeyFrame();
-                firstKeyFrameRequested = true;
-            }
-
-            if (inputFramesInBatch == 0 && config.requestKeyFrameEveryBatch) {
-                requestKeyFrame();
-            }
-
-            drainEncoder(false);
-
-            int inputIndex = encoder.dequeueInputBuffer(INPUT_DEQUEUE_TIMEOUT_US);
-            if (inputIndex < 0) {
-                endEncodeTiming();
+        getEncoderHandler().post(() -> {
+            if (released || !started || nativeHandle == 0L) {
                 return;
             }
 
-            ByteBuffer inputBuffer = encoder.getInputBuffer(inputIndex);
-            if (inputBuffer == null) {
-                endEncodeTiming();
-                return;
+            try {
+                dispatchNativeBatch(nativeEncodeFrame(nativeHandle, frameData, timestampMs));
+            } catch (Exception error) {
+                callback.onEncoderError(error);
             }
-
-            inputBuffer.clear();
-
-            byte[] encoderReadyYuv = adaptInputYuvToEncoderColorFormat(
-                    inputYuvData,
-                    encoderColorFormat,
-                    config.inputYuvFormat,
-                    config.width,
-                    config.height
-            );
-
-            if (encoderReadyYuv.length > inputBuffer.remaining()) {
-                throw new IllegalStateException("H.264 encoder input buffer is too small. "
-                        + "required=" + encoderReadyYuv.length
-                        + ", available=" + inputBuffer.remaining());
-            }
-
-            inputBuffer.put(encoderReadyYuv);
-
-            encoder.queueInputBuffer(
-                    inputIndex,
-                    0,
-                    encoderReadyYuv.length,
-                    timestampMs * 1000L,
-                    0
-            );
-
-            inputFramesInBatch++;
-            totalInputFrames++;
-
-            drainEncoder(false);
-
-            if (inputFramesInBatch >= config.batchFrameCount) {
-                waitForCurrentBatchEncodedAndDispatch(false, timestampMs);
-            }
-
-            endEncodeTiming();
-
-        } catch (Exception error) {
-            endEncodeTiming();
-            callback.onEncoderError(error);
-        }
+        });
     }
 
-    public synchronized void flush(long timestampMs) {
-        if (released || !started || encoder == null) {
+    public void flush(long timestampMs) {
+        if (released || !started || nativeHandle == 0L) {
             return;
         }
 
-        try {
-            if (!hasActiveBatch()) {
-                return;
+        runOnEncoderThreadBlocking(() -> {
+            if (released || !started || nativeHandle == 0L) {
+                return null;
             }
 
-            beginEncodeTiming();
-
-            drainEncoder(false);
-
-            if (inputFramesInBatch > 0) {
-                waitForCurrentBatchEncodedAndDispatch(true, timestampMs);
-            } else if (batchOutput.size() > 0) {
-                dispatchCurrentBatch(timestampMs, getAndFreezeCurrentBatchDurationNs(), true);
+            try {
+                dispatchNativeBatch(nativeFlush(nativeHandle, timestampMs));
+            } catch (Exception error) {
+                callback.onEncoderError(error);
             }
-
-            endEncodeTiming();
-
-        } catch (Exception error) {
-            endEncodeTiming();
-            callback.onEncoderError(error);
-        }
+            return null;
+        });
     }
 
-    public synchronized void stop() {
-        if (!started && encoder == null) {
+    public void stop() {
+        if (nativeHandle == 0L) {
             return;
         }
 
-        try {
-            if (encoder != null) {
-                try {
-                    if (hasActiveBatch()) {
-                        beginEncodeTiming();
-                        drainEncoder(false);
-                        waitForCurrentBatchEncodedAndDispatch(true, System.currentTimeMillis());
-                        endEncodeTiming();
-                    }
-                } catch (RuntimeException ignored) {
-                    endEncodeTiming();
-                }
-
-                try {
-                    encoder.stop();
-                } catch (RuntimeException ignored) {
-                }
-
-                try {
-                    encoder.release();
-                } catch (RuntimeException ignored) {
-                }
-
-                encoder = null;
+        runOnEncoderThreadBlocking(() -> {
+            if (nativeHandle == 0L) {
+                return null;
             }
 
-            batchOutput.reset();
-            inputFramesInBatch = 0;
-            encodedFramesInBatch = 0;
-            codecConfig = null;
-            currentBatchEncodeComputeTimeNs = 0L;
-            activeEncodeTimingStartNs = 0L;
-
-            started = false;
-            initialized = false;
-
-            callback.onEncoderStopped();
-
-        } catch (Exception error) {
-            callback.onEncoderError(error);
-        }
+            try {
+                if (started || nativeIsStarted(nativeHandle)) {
+                    dispatchNativeBatch(nativeFlush(nativeHandle, System.currentTimeMillis()));
+                    nativeStop(nativeHandle);
+                    started = false;
+                    callback.onEncoderStopped();
+                }
+            } catch (Exception error) {
+                callback.onEncoderError(error);
+            } finally {
+                initialized = nativeHandle != 0L && !released;
+            }
+            return null;
+        });
     }
 
-    public synchronized void release() {
+    public void release() {
         if (released) {
             return;
         }
 
         stop();
 
+        if (nativeHandle != 0L) {
+            runOnEncoderThreadBlocking(() -> {
+                if (nativeHandle != 0L) {
+                    nativeRelease(nativeHandle);
+                    nativeHandle = 0L;
+                }
+                return null;
+            });
+        }
+
         released = true;
         started = false;
         initialized = false;
-
-        batchOutput.reset();
+        stopEncoderThread();
     }
 
-    public synchronized boolean isStarted() {
+    public boolean isStarted() {
         return started;
     }
 
-    public synchronized boolean isReleased() {
+    public boolean isReleased() {
         return released;
     }
 
-    public synchronized long getTotalInputFrames() {
-        return totalInputFrames;
-    }
-
-    public synchronized long getBatchSequence() {
-        return batchSequence;
-    }
-
-    private void startBatchIfNeeded() {
-        if (!hasActiveBatch()) {
-            inputFramesInBatch = 0;
-            encodedFramesInBatch = 0;
-            currentBatchEncodeComputeTimeNs = 0L;
-            activeEncodeTimingStartNs = 0L;
-            lastEncodedTimestampMs = 0L;
-            batchOutput.reset();
+    public long getTotalInputFrames() {
+        if (nativeHandle == 0L) {
+            return 0L;
         }
+        Long value = runOnEncoderThreadBlocking(() ->
+                nativeHandle == 0L ? 0L : nativeGetTotalInputFrames(nativeHandle));
+        return value == null ? 0L : value;
     }
 
-    private boolean hasActiveBatch() {
-        return inputFramesInBatch > 0
-                || encodedFramesInBatch > 0
-                || batchOutput.size() > 0;
-    }
-
-    private void beginEncodeTiming() {
-        if (activeEncodeTimingStartNs == 0L) {
-            activeEncodeTimingStartNs = System.nanoTime();
+    public long getBatchSequence() {
+        if (nativeHandle == 0L) {
+            return 0L;
         }
+        Long value = runOnEncoderThreadBlocking(() ->
+                nativeHandle == 0L ? 0L : nativeGetBatchSequence(nativeHandle));
+        return value == null ? 0L : value;
     }
 
-    private void endEncodeTiming() {
-        if (activeEncodeTimingStartNs > 0L && hasActiveBatch()) {
-            long nowNs = System.nanoTime();
-            currentBatchEncodeComputeTimeNs += nowNs - activeEncodeTimingStartNs;
-        }
-
-        activeEncodeTimingStartNs = 0L;
-    }
-
-    private long getAndFreezeCurrentBatchDurationNs() {
-        if (activeEncodeTimingStartNs > 0L) {
-            long nowNs = System.nanoTime();
-            currentBatchEncodeComputeTimeNs += nowNs - activeEncodeTimingStartNs;
-            activeEncodeTimingStartNs = nowNs;
-        }
-
-        return currentBatchEncodeComputeTimeNs;
-    }
-
-    private void waitForCurrentBatchEncodedAndDispatch(
-            boolean partialBatch,
-            long fallbackTimestampMs
-    ) throws IOException {
-
-        long deadlineNs = System.nanoTime() + MAX_BATCH_OUTPUT_WAIT_NS;
-        int targetFrameCount = partialBatch
-                ? inputFramesInBatch
-                : config.batchFrameCount;
-
-        while (encodedFramesInBatch < targetFrameCount
-                && System.nanoTime() < deadlineNs) {
-            drainEncoder(true);
-        }
-
-        if (batchOutput.size() <= 0) {
+    private void dispatchNativeBatch(NativeBatchResult batch) {
+        if (batch == null || batch.encodedBatch == null || batch.encodedBatch.length == 0) {
             return;
-        }
-
-        long timestampForBatch = lastEncodedTimestampMs > 0L
-                ? lastEncodedTimestampMs
-                : fallbackTimestampMs;
-
-        long batchDurationNs = getAndFreezeCurrentBatchDurationNs();
-
-        dispatchCurrentBatch(timestampForBatch, batchDurationNs, partialBatch);
-    }
-
-    private void dispatchCurrentBatch(
-            long timestampMs,
-            long batchDurationNs,
-            boolean partialBatch
-    ) throws IOException {
-
-        byte[] encodedBatch = batchOutput.toByteArray();
-
-        batchOutput.reset();
-
-        int frameCountForThisBatch = encodedFramesInBatch > 0
-                ? encodedFramesInBatch
-                : inputFramesInBatch;
-
-        inputFramesInBatch = 0;
-        encodedFramesInBatch = 0;
-        currentBatchEncodeComputeTimeNs = 0L;
-        activeEncodeTimingStartNs = 0L;
-        lastEncodedTimestampMs = 0L;
-
-        if (encodedBatch.length == 0) {
-            return;
-        }
-
-        if (codecConfig != null && !startsWithCodecConfig(encodedBatch)) {
-            ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-            outputStream.write(codecConfig, 0, codecConfig.length);
-            outputStream.write(encodedBatch, 0, encodedBatch.length);
-            encodedBatch = outputStream.toByteArray();
-        }
-
-        batchSequence++;
-
-        if (config.enableBatchTimingLogs) {
-            logBatchTiming(
-                    encodedBatch,
-                    frameCountForThisBatch,
-                    batchDurationNs,
-                    partialBatch
-            );
         }
 
         callback.onBatchEncodeTimingAvailable(
-                batchSequence,
-                frameCountForThisBatch,
-                batchDurationNs,
-                partialBatch,
-                encodedBatch.length
-        );
+                batch.batchSequence,
+                batch.frameCount,
+                batch.batchDurationNs,
+                batch.partialBatch,
+                batch.encodedBatch.length);
 
-        Log.d("ENCODER_QQ", "dispatchCurrentBatch:Total Encoding Time "+(System.currentTimeMillis() - encoderStartMs));
         callback.onEncodedFrameBatchAvailable(
-                encodedBatch,
+                batch.encodedBatch,
                 config.width,
                 config.height,
-                timestampMs,
-                batchSequence
-        );
+                batch.timestampMs,
+                batch.batchSequence);
     }
 
-    private void logBatchTiming(
-            byte[] encodedBatch,
-            int frameCountForThisBatch,
-            long batchDurationNs,
-            boolean partialBatch
-    ) {
-
-        double batchDurationMs = batchDurationNs / 1_000_000.0;
-        double averageFrameTimeMs = frameCountForThisBatch > 0
-                ? batchDurationMs / frameCountForThisBatch
-                : 0.0;
-        double outputKb = encodedBatch.length / 1024.0;
-
-        long runningDurationNs = encoderStartTimeNs > 0L
-                ? System.nanoTime() - encoderStartTimeNs
-                : 0L;
-
-        double runningDurationSeconds = runningDurationNs / 1_000_000_000.0;
-        double effectiveInputFps = runningDurationSeconds > 0.0
-                ? totalInputFrames / runningDurationSeconds
-                : 0.0;
-
-        Log.d(TAG,
-                "H.264 batch encoded. "
-                        + "batchSequence=" + batchSequence
-                        + ", frames=" + frameCountForThisBatch
-                        + ", configuredBatchFrames=" + config.batchFrameCount
-                        + ", partialBatch=" + partialBatch
-                        + ", encodeComputeDurationMs=" + formatDouble(batchDurationMs)
-                        + ", avgEncodeComputeFrameMs=" + formatDouble(averageFrameTimeMs)
-                        + ", outputKb=" + formatDouble(outputKb)
-                        + ", width=" + config.width
-                        + ", height=" + config.height
-                        + ", inputYuvFormat=" + config.inputYuvFormat
-                        + ", encoderColorFormat=" + encoderColorFormat
-                        + ", bitrateKbps=" + config.bitrateKbps
-                        + ", configuredFps=" + config.frameRateFps
-                        + ", effectiveInputFps=" + formatDouble(effectiveInputFps)
-                        + ", totalInputFrames=" + totalInputFrames);
-    }
-
-    private String formatDouble(double value) {
-        return String.format(Locale.US, "%.2f", value);
-    }
-
-    private int getExpectedYuvSize() {
-        return config.width * config.height * 3 / 2;
-    }
-
-    private EncoderSelection selectAvcEncoder() throws IOException {
-        MediaCodecList codecList = new MediaCodecList(MediaCodecList.REGULAR_CODECS);
-
-        for (MediaCodecInfo codecInfo : codecList.getCodecInfos()) {
-            if (!codecInfo.isEncoder()) {
-                continue;
+    private Handler getEncoderHandler() {
+        synchronized (this) {
+            if (encoderThread == null) {
+                encoderThread = new HandlerThread("h264-encoder-thread");
+                encoderThread.start();
+                encoderHandler = new Handler(encoderThread.getLooper());
             }
+            return encoderHandler;
+        }
+    }
 
-            for (String type : codecInfo.getSupportedTypes()) {
-                if (MediaFormat.MIMETYPE_VIDEO_AVC.equalsIgnoreCase(type)) {
-                    int supportedColorFormat = selectColorFormat(codecInfo);
+    private <T> T runOnEncoderThreadBlocking(EncoderTask<T> task) {
+        Handler handler = getEncoderHandler();
+        Looper looper = handler.getLooper();
 
-                    if (supportedColorFormat != 0) {
-                        return new EncoderSelection(codecInfo, supportedColorFormat);
-                    }
-                }
-            }
+        if (Looper.myLooper() == looper) {
+            return task.run();
         }
 
-        throw new IOException("No H.264 encoder with supported YUV420 color format is available.");
-    }
+        CountDownLatch latch = new CountDownLatch(1);
+        AtomicReference<T> result = new AtomicReference<>();
+        AtomicReference<RuntimeException> runtimeError = new AtomicReference<>();
 
-    private int selectColorFormat(MediaCodecInfo codecInfo) {
-        MediaCodecInfo.CodecCapabilities capabilities =
-                codecInfo.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC);
-
-        int[] preferredFormats = new int[]{
-                MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420SemiPlanar,
-                MediaCodecInfo.CodecCapabilities.COLOR_TI_FormatYUV420PackedSemiPlanar,
-                MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420PackedSemiPlanar,
-                MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Planar,
-                MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420PackedPlanar,
-                MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible
-        };
-
-        for (int preferredFormat : preferredFormats) {
-            for (int supportedFormat : capabilities.colorFormats) {
-                if (supportedFormat == preferredFormat) {
-                    return preferredFormat;
-                }
+        handler.post(() -> {
+            try {
+                result.set(task.run());
+            } catch (RuntimeException error) {
+                runtimeError.set(error);
+            } finally {
+                latch.countDown();
             }
+        });
+
+        try {
+            latch.await();
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            callback.onEncoderError(error);
         }
 
-        return 0;
+        RuntimeException error = runtimeError.get();
+        if (error != null) {
+            throw error;
+        }
+
+        return result.get();
     }
 
-    private void requestKeyFrame() {
-        if (encoder == null) {
+    private void stopEncoderThread() {
+        HandlerThread threadToStop;
+
+        synchronized (this) {
+            threadToStop = encoderThread;
+            encoderThread = null;
+            encoderHandler = null;
+        }
+
+        if (threadToStop == null) {
+            return;
+        }
+
+        threadToStop.quitSafely();
+
+        if (Looper.myLooper() == threadToStop.getLooper()) {
             return;
         }
 
         try {
-            Bundle parameters = new Bundle();
-            parameters.putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0);
-            encoder.setParameters(parameters);
-        } catch (RuntimeException ignored) {
+            threadToStop.join();
+        } catch (InterruptedException ignored) {
+            Thread.currentThread().interrupt();
         }
     }
 
-    private void drainEncoder(boolean waitForOutput) throws IOException {
-        if (encoder == null) {
-            return;
-        }
+    private interface EncoderTask<T> {
+        T run();
+    }
 
-        while (true) {
-            int timeoutUs = waitForOutput ? OUTPUT_DEQUEUE_TIMEOUT_US : 0;
-            int outputIndex = encoder.dequeueOutputBuffer(bufferInfo, timeoutUs);
+    private static final class NativeBatchResult {
+        final byte[] encodedBatch;
+        final long timestampMs;
+        final long batchSequence;
+        final int frameCount;
+        final long batchDurationNs;
+        final boolean partialBatch;
 
-            if (outputIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                return;
-            }
-
-            if (outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                rememberCodecConfig(encoder.getOutputFormat());
-                continue;
-            }
-
-            if (outputIndex < 0) {
-                continue;
-            }
-
-            ByteBuffer outputBuffer = encoder.getOutputBuffer(outputIndex);
-
-            if (outputBuffer != null && bufferInfo.size > 0) {
-                byte[] encoded = new byte[bufferInfo.size];
-
-                outputBuffer.position(bufferInfo.offset);
-                outputBuffer.limit(bufferInfo.offset + bufferInfo.size);
-                outputBuffer.get(encoded);
-
-                if ((bufferInfo.flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
-                    codecConfig = encoded;
-                } else {
-                    rememberCodecConfigFromAnnexB(encoded);
-
-                    if ((bufferInfo.flags & MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
-                            && codecConfig != null) {
-                        batchOutput.write(codecConfig, 0, codecConfig.length);
-                    }
-
-                    batchOutput.write(encoded, 0, encoded.length);
-                    encodedFramesInBatch++;
-
-                    if (bufferInfo.presentationTimeUs > 0L) {
-                        lastEncodedTimestampMs = bufferInfo.presentationTimeUs / 1000L;
-                    }
-                }
-            }
-
-            encoder.releaseOutputBuffer(outputIndex, false);
-
-            if (!waitForOutput) {
-                continue;
-            }
-
-            if (inputFramesInBatch > 0
-                    && encodedFramesInBatch >= inputFramesInBatch) {
-                return;
-            }
+        NativeBatchResult(
+                byte[] encodedBatch,
+                long timestampMs,
+                long batchSequence,
+                int frameCount,
+                long batchDurationNs,
+                boolean partialBatch
+        ) {
+            this.encodedBatch = encodedBatch;
+            this.timestampMs = timestampMs;
+            this.batchSequence = batchSequence;
+            this.frameCount = frameCount;
+            this.batchDurationNs = batchDurationNs;
+            this.partialBatch = partialBatch;
         }
     }
 
-    private void rememberCodecConfig(MediaFormat outputFormat) {
-        ByteBuffer csd0 = outputFormat.getByteBuffer("csd-0");
-        ByteBuffer csd1 = outputFormat.getByteBuffer("csd-1");
-
-        if (csd0 == null || csd1 == null) {
-            return;
-        }
-
-        byte[] sps = copyRemaining(csd0);
-        byte[] pps = copyRemaining(csd1);
-
-        codecConfig = new byte[sps.length + pps.length];
-
-        System.arraycopy(sps, 0, codecConfig, 0, sps.length);
-        System.arraycopy(pps, 0, codecConfig, sps.length, pps.length);
-
-        Log.d(TAG, "H.264 encoder configured. width="
-                + config.width
-                + ", height=" + config.height
-                + ", encoderColorFormat=" + encoderColorFormat);
-    }
-
-    private byte[] copyRemaining(ByteBuffer buffer) {
-        ByteBuffer duplicate = buffer.duplicate();
-        byte[] data = new byte[duplicate.remaining()];
-        duplicate.get(data);
-        return data;
-    }
-
-    private void rememberCodecConfigFromAnnexB(byte[] encoded) {
-        if (encoded == null || encoded.length == 0) {
-            return;
-        }
-
-        int spsStart = -1;
-        int ppsStart = -1;
-        int configEnd = -1;
-        int offset = 0;
-
-        while (true) {
-            int start = findStartCode(encoded, offset);
-            if (start < 0) {
-                break;
-            }
-
-            int nalStart = start + startCodeLength(encoded, start);
-            int next = findStartCode(encoded, nalStart);
-            int nalEnd = next < 0 ? encoded.length : next;
-
-            if (nalStart < nalEnd) {
-                int nalType = encoded[nalStart] & 0x1f;
-
-                if (nalType == 7 && spsStart < 0) {
-                    spsStart = start;
-                } else if (nalType == 8 && spsStart >= 0 && ppsStart < 0) {
-                    ppsStart = start;
-                    configEnd = nalEnd;
-                } else if (nalType != 7 && nalType != 8 && ppsStart >= 0) {
-                    configEnd = start;
-                    break;
-                }
-            }
-
-            if (next < 0) {
-                break;
-            }
-
-            offset = next;
-        }
-
-        if (spsStart >= 0 && ppsStart >= 0 && configEnd > spsStart) {
-            codecConfig = new byte[configEnd - spsStart];
-            System.arraycopy(encoded, spsStart, codecConfig, 0, codecConfig.length);
-        }
-    }
-
-    private boolean startsWithCodecConfig(byte[] encoded) {
-        int start = findStartCode(encoded, 0);
-
-        if (start < 0) {
-            return false;
-        }
-
-        int nalStart = start + startCodeLength(encoded, start);
-
-        if (nalStart >= encoded.length) {
-            return false;
-        }
-
-        int nalType = encoded[nalStart] & 0x1f;
-
-        return nalType == 7 || nalType == 8;
-    }
-
-    private int findStartCode(byte[] data, int fromIndex) {
-        if (data == null) {
-            return -1;
-        }
-
-        for (int i = Math.max(0, fromIndex); i <= data.length - 3; i++) {
-            if (data[i] == 0 && data[i + 1] == 0) {
-                if (data[i + 2] == 1) {
-                    return i;
-                }
-
-                if (i <= data.length - 4
-                        && data[i + 2] == 0
-                        && data[i + 3] == 1) {
-                    return i;
-                }
-            }
-        }
-
-        return -1;
-    }
-
-    private int startCodeLength(byte[] data, int start) {
-        return data[start + 2] == 1 ? 3 : 4;
-    }
-
-    private byte[] adaptInputYuvToEncoderColorFormat(
-            byte[] input,
-            int encoderColorFormat,
-            InputYuvFormat inputFormat,
+    private static native long nativeCreate(
             int width,
-            int height
-    ) {
+            int height,
+            int frameRateFps,
+            int bitrateKbps,
+            int batchFrameCount,
+            int iFrameIntervalSeconds,
+            int inputYuvFormat,
+            boolean enableBatchTimingLogs,
+            boolean requestKeyFrameAtStart,
+            boolean requestKeyFrameEveryBatch);
 
-        boolean encoderWantsSemiPlanar = isSemiPlanar(encoderColorFormat);
+    private static native void nativeStart(long handle);
 
-        if (encoderWantsSemiPlanar) {
-            return toNv12(input, inputFormat, width, height);
-        }
+    private static native NativeBatchResult nativeEncodeFrame(
+            long handle,
+            byte[] inputYuvData,
+            long timestampMs);
 
-        return toI420(input, inputFormat, width, height);
-    }
+    private static native NativeBatchResult nativeFlush(long handle, long timestampMs);
 
-    private byte[] toNv12(
-            byte[] input,
-            InputYuvFormat inputFormat,
-            int width,
-            int height
-    ) {
+    private static native void nativeStop(long handle);
 
-        int frameSize = width * height;
-        int totalSize = frameSize * 3 / 2;
+    private static native void nativeRelease(long handle);
 
-        if (inputFormat == InputYuvFormat.NV12) {
-            return copyExact(input, totalSize);
-        }
+    private static native boolean nativeIsStarted(long handle);
 
-        byte[] output = new byte[totalSize];
+    private static native long nativeGetTotalInputFrames(long handle);
 
-        System.arraycopy(input, 0, output, 0, frameSize);
-
-        if (inputFormat == InputYuvFormat.NV21) {
-            for (int i = frameSize; i < totalSize; i += 2) {
-                output[i] = input[i + 1];
-                output[i + 1] = input[i];
-            }
-            return output;
-        }
-
-        if (inputFormat == InputYuvFormat.I420) {
-            int chromaSize = frameSize / 4;
-            int uStart = frameSize;
-            int vStart = frameSize + chromaSize;
-            int out = frameSize;
-
-            for (int i = 0; i < chromaSize; i++) {
-                output[out++] = input[uStart + i];
-                output[out++] = input[vStart + i];
-            }
-
-            return output;
-        }
-
-        return output;
-    }
-
-    private byte[] toI420(
-            byte[] input,
-            InputYuvFormat inputFormat,
-            int width,
-            int height
-    ) {
-
-        int frameSize = width * height;
-        int chromaSize = frameSize / 4;
-        int totalSize = frameSize * 3 / 2;
-
-        if (inputFormat == InputYuvFormat.I420) {
-            return copyExact(input, totalSize);
-        }
-
-        byte[] output = new byte[totalSize];
-
-        System.arraycopy(input, 0, output, 0, frameSize);
-
-        int uStart = frameSize;
-        int vStart = frameSize + chromaSize;
-
-        if (inputFormat == InputYuvFormat.NV12) {
-            for (int i = 0; i < chromaSize; i++) {
-                output[uStart + i] = input[frameSize + i * 2];
-                output[vStart + i] = input[frameSize + i * 2 + 1];
-            }
-            return output;
-        }
-
-        if (inputFormat == InputYuvFormat.NV21) {
-            for (int i = 0; i < chromaSize; i++) {
-                output[uStart + i] = input[frameSize + i * 2 + 1];
-                output[vStart + i] = input[frameSize + i * 2];
-            }
-            return output;
-        }
-
-        return output;
-    }
-
-    private byte[] copyExact(byte[] input, int size) {
-        if (input.length == size) {
-            return input;
-        }
-
-        byte[] output = new byte[size];
-        System.arraycopy(input, 0, output, 0, Math.min(input.length, size));
-        return output;
-    }
-
-    private boolean isSemiPlanar(int outputColorFormat) {
-        return outputColorFormat == MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420SemiPlanar
-                || outputColorFormat == MediaCodecInfo.CodecCapabilities.COLOR_TI_FormatYUV420PackedSemiPlanar
-                || outputColorFormat == MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420PackedSemiPlanar
-                || outputColorFormat == MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible;
-    }
-
-    private static final class EncoderSelection {
-        final MediaCodecInfo codecInfo;
-        final int colorFormat;
-
-        EncoderSelection(MediaCodecInfo codecInfo, int colorFormat) {
-            this.codecInfo = codecInfo;
-            this.colorFormat = colorFormat;
-        }
-    }
+    private static native long nativeGetBatchSequence(long handle);
 }

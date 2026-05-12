@@ -178,7 +178,7 @@ public class CameraRecordingGLViewActivity extends AppCompatActivity {
                             .setFrameRateFps(FRAME_RATE_FPS)
                             .setBitrateKbps(1200)
                             .setBatchFrameCount(BATCH_FRAME_COUNT)
-                            .setInputYuvFormat(H264FrameBatchEncoder.InputYuvFormat.NV21)
+                            .setInputYuvFormat(H264FrameBatchEncoder.InputYuvFormat.NV12)
                             .build(),
                     encoderCallback);
             encoder.start();
@@ -189,7 +189,7 @@ public class CameraRecordingGLViewActivity extends AppCompatActivity {
                             .setSize(VIDEO_WIDTH, VIDEO_HEIGHT)
                             .setFrameRateFps(FRAME_RATE_FPS)
                             .setImageReaderMaxImages(BATCH_FRAME_COUNT * 2)
-                            .setFrameType(CameraController.FrameType.IMAGE_READER_YUV)
+                            .setFrameType(CameraController.FrameType.IMAGE_READER_NV12)
                             .setCameraFacing(CameraController.CameraFacing.FRONT)
                             .build(),
                     cameraCallback);

@@ -2,6 +2,12 @@ cmake_minimum_required(VERSION 3.22.1)
 
 project(webstream_jxl)
 
+add_library(webstream_h264 SHARED webstream_h264.cpp)
+target_link_libraries(webstream_h264
+        android
+        log
+        mediandk)
+
 set(WEBSTREAM_LIBJXL_ROOT
         "${CMAKE_CURRENT_LIST_DIR}/third_party/libjxl"
         CACHE PATH "Path to a libjxl source checkout or compatible Android external libjxl tree.")
