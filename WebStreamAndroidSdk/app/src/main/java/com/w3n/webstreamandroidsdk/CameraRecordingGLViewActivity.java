@@ -3,6 +3,7 @@ package com.w3n.webstreamandroidsdk;
 import android.Manifest;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
+import android.opengl.GLSurfaceView;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -27,20 +28,20 @@ import com.w3n.webstream.Util.H264FrameBatchEncoder;
 import java.util.ArrayDeque;
 import java.util.Locale;
 import java.util.Queue;
+import java.util.Random;
 
-public class CameraRecordingActivity extends AppCompatActivity {
-    private static final String TAG = "CameraRecordingActivity";
-    private static final int REQUEST_CAMERA_PERMISSION = 1001;
-    private static final int VIDEO_WIDTH = 640;
-    private static final int VIDEO_HEIGHT = 480;
-    private static final int FRAME_RATE_FPS = 30;
+public class CameraRecordingGLViewActivity extends AppCompatActivity {
+    private static final String TAG = "CameraRecordingGLViewActivity";
+    private static final int REQUEST_CAMERA_PERMISSION = 2001;
+    private static final int VIDEO_WIDTH = 1280;
+    private static final int VIDEO_HEIGHT = 720;
+    private static final int FRAME_RATE_FPS = 15;
     private static final int BATCH_FRAME_COUNT = 5;
     private static final int MAX_PENDING_RENDER_TIMING_BATCHES = 2;
 
     private TextView statusText;
     private TextView detailsText;
     private TextView elapsedTimeText;
-    private ImageView decodedPreviewImage;
     private Button encodeButton;
     private Button decodeButton;
     private Bitmap latestDecodedPreviewBitmap;
@@ -74,6 +75,9 @@ public class CameraRecordingActivity extends AppCompatActivity {
     private long encodingStartTimeMs;
     private final Handler elapsedTimeHandler = new Handler(Looper.getMainLooper());
 
+    private GLSurfaceView glSurfaceView;
+    private YuvFrameRenderer renderer;
+
     private final Runnable elapsedTimeRunnable = new Runnable() {
         @Override
         public void run() {
@@ -94,7 +98,7 @@ public class CameraRecordingActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         EdgeToEdge.enable(this);
-        setContentView(R.layout.activity_camera_recording);
+        setContentView(R.layout.activity_camera_recording_glview);
 
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.cameraRecordingRoot), (v, insets) -> {
             Insets systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
@@ -109,7 +113,7 @@ public class CameraRecordingActivity extends AppCompatActivity {
         statusText = findViewById(R.id.recordingStatusText);
         detailsText = findViewById(R.id.recordingDetailsText);
         elapsedTimeText = findViewById(R.id.elapsedTimeText);
-        decodedPreviewImage = findViewById(R.id.decodedPreviewImage);
+        //decodedPreviewImage = findViewById(R.id.decodedPreviewImage);
         encodeButton = findViewById(R.id.encodeButton);
         decodeButton = findViewById(R.id.decodeButton);
 
@@ -132,6 +136,18 @@ public class CameraRecordingActivity extends AppCompatActivity {
         updateControls();
         updateDetails();
         resetElapsedTimer();
+
+
+        glSurfaceView = findViewById(R.id.decodedPreviewImage);
+
+        glSurfaceView.setEGLContextClientVersion(2);
+
+        renderer = new YuvFrameRenderer(VIDEO_WIDTH, VIDEO_HEIGHT);
+
+        glSurfaceView.setRenderer(renderer);
+
+        // Render only when new frame arrives.
+        glSurfaceView.setRenderMode(GLSurfaceView.RENDERMODE_WHEN_DIRTY);
     }
 
     private void startEncodingWithPermission() {
@@ -202,7 +218,7 @@ public class CameraRecordingActivity extends AppCompatActivity {
                         totalEncodeFrameCallTimeNs += System.nanoTime() - encodeStartNs;
                     }
 
-                    runOnUiThread(CameraRecordingActivity.this::updateDetails);
+                    runOnUiThread(CameraRecordingGLViewActivity.this::updateDetails);
                 }
 
                 @Override
@@ -218,7 +234,7 @@ public class CameraRecordingActivity extends AppCompatActivity {
                 @Override
                 public void onCameraError(Exception error) {
                     showError(error);
-                    runOnUiThread(CameraRecordingActivity.this::stopEncoding);
+                    runOnUiThread(CameraRecordingGLViewActivity.this::stopEncoding);
                 }
             };
 
@@ -254,7 +270,7 @@ public class CameraRecordingActivity extends AppCompatActivity {
                         decoder.onDecodeChunk(encodedBatch);
                     }
 
-                    runOnUiThread(CameraRecordingActivity.this::updateDetails);
+                    runOnUiThread(CameraRecordingGLViewActivity.this::updateDetails);
                 }
 
                 @Override
@@ -289,7 +305,7 @@ public class CameraRecordingActivity extends AppCompatActivity {
                 @Override
                 public void onEncoderError(Exception error) {
                     showError(error);
-                    runOnUiThread(CameraRecordingActivity.this::stopEncoding);
+                    runOnUiThread(CameraRecordingGLViewActivity.this::stopEncoding);
                 }
             };
 
@@ -314,35 +330,42 @@ public class CameraRecordingActivity extends AppCompatActivity {
 
     private final H264FrameBatchDecoder.Callback decoderCallback =
             new H264FrameBatchDecoder.Callback() {
+
+//                @Override
+//                public void onImageAvailable(H264FrameBatchDecoder.DecodedFrame frame) {
+//                    decodedFrames = frame.sequence;
+//
+//                    recordDecodedFrameForBatchTiming();
+//
+//                    Bitmap bitmap = frame.bitmap;
+//
+//                    Log.d(TAG,
+//                            "Decoded image available. sequence="
+//                                    + frame.sequence
+//                                    + ", width=" + frame.width
+//                                    + ", height=" + frame.height
+//                                    + ", timestampNs=" + frame.timestampNs
+//                                    + ", decodedBatches=" + decodedBatches);
+//
+//                    runOnUiThread(() -> {
+//                        if (bitmap != null) {
+//                            Bitmap previousBitmap = latestDecodedPreviewBitmap;
+//                            latestDecodedPreviewBitmap = bitmap;
+//                            decodedPreviewImage.setImageBitmap(bitmap);
+//                            if (previousBitmap != null
+//                                    && previousBitmap != bitmap
+//                                    && !previousBitmap.isRecycled()) {
+//                                previousBitmap.recycle();
+//                            }
+//                        }
+//                        updateDetails();
+//                    });
+//                }
+
                 @Override
                 public void onImageAvailable(H264FrameBatchDecoder.DecodedFrame frame) {
-                    decodedFrames = frame.sequence;
-
-                    recordDecodedFrameForBatchTiming();
-
-                    Bitmap bitmap = null;
-
-                    Log.d(TAG,
-                            "Decoded image available. sequence="
-                                    + frame.sequence
-                                    + ", width=" + frame.width
-                                    + ", height=" + frame.height
-                                    + ", timestampNs=" + frame.timestampNs
-                                    + ", decodedBatches=" + decodedBatches);
-
-                    runOnUiThread(() -> {
-                        if (bitmap != null) {
-                            Bitmap previousBitmap = latestDecodedPreviewBitmap;
-                            latestDecodedPreviewBitmap = bitmap;
-                            decodedPreviewImage.setImageBitmap(bitmap);
-                            if (previousBitmap != null
-                                    && previousBitmap != bitmap
-                                    && !previousBitmap.isRecycled()) {
-                                previousBitmap.recycle();
-                            }
-                        }
-                        updateDetails();
-                    });
+                    renderer.updateFrame(frame);
+                    glSurfaceView.requestRender();
                 }
 
                 @Override
@@ -358,7 +381,7 @@ public class CameraRecordingActivity extends AppCompatActivity {
                                     + ", durationMs="
                                     + String.format(Locale.US, "%.3f", decodeDurationNs / 1_000_000.0));
 
-                    runOnUiThread(CameraRecordingActivity.this::updateDetails);
+                    runOnUiThread(CameraRecordingGLViewActivity.this::updateDetails);
                 }
 
                 @Override
@@ -386,7 +409,7 @@ public class CameraRecordingActivity extends AppCompatActivity {
                                     + ", decodedFrameCount=" + decodedFrameCount
                                     + ", queuedDecodedFrames=" + queuedDecodedFrameCount);
 
-                    runOnUiThread(CameraRecordingActivity.this::updateDetails);
+                    runOnUiThread(CameraRecordingGLViewActivity.this::updateDetails);
                 }
 
                 @Override
@@ -402,7 +425,7 @@ public class CameraRecordingActivity extends AppCompatActivity {
                                     + ", queuedDecodedFrames=" + queuedDecodedFrameCount
                                     + ", droppedDecodedFrames=" + droppedDecodedFrames);
 
-                    runOnUiThread(CameraRecordingActivity.this::updateDetails);
+                    runOnUiThread(CameraRecordingGLViewActivity.this::updateDetails);
                 }
 
                 @Override
@@ -418,7 +441,7 @@ public class CameraRecordingActivity extends AppCompatActivity {
                 @Override
                 public void onDecoderError(Exception error) {
                     showError(error);
-                    runOnUiThread(CameraRecordingActivity.this::stopDecoder);
+                    runOnUiThread(CameraRecordingGLViewActivity.this::stopDecoder);
                 }
             };
 
@@ -457,9 +480,6 @@ public class CameraRecordingActivity extends AppCompatActivity {
     }
 
     private void recycleLatestDecodedPreviewBitmap() {
-        if (decodedPreviewImage != null) {
-            decodedPreviewImage.setImageBitmap(null);
-        }
 
         if (latestDecodedPreviewBitmap != null
                 && !latestDecodedPreviewBitmap.isRecycled()) {
@@ -700,6 +720,18 @@ public class CameraRecordingActivity extends AppCompatActivity {
         } else if (requestCode == REQUEST_CAMERA_PERMISSION) {
             showStatus("Camera permission is required to encode.");
         }
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        glSurfaceView.onPause();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        glSurfaceView.onResume();
     }
 
     @Override

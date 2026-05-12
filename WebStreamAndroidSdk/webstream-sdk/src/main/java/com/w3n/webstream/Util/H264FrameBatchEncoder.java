@@ -14,6 +14,8 @@ import java.util.Locale;
 
 public final class H264FrameBatchEncoder {
 
+    private long encoderStartMs;
+
     public interface Callback {
         void onEncodedFrameBatchAvailable(
                 byte[] encodedBatch,
@@ -288,6 +290,7 @@ public final class H264FrameBatchEncoder {
             return;
         }
 
+        encoderStartMs = System.currentTimeMillis();
         int expectedSize = getExpectedYuvSize();
         if (inputYuvData.length < expectedSize) {
             callback.onEncoderError(new IllegalArgumentException(
@@ -593,6 +596,7 @@ public final class H264FrameBatchEncoder {
                 encodedBatch.length
         );
 
+        Log.d("ENCODER_QQ", "dispatchCurrentBatch:Total Encoding Time "+(System.currentTimeMillis() - encoderStartMs));
         callback.onEncodedFrameBatchAvailable(
                 encodedBatch,
                 config.width,

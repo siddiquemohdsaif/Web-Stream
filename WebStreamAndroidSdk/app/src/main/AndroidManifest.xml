@@ -12,8 +12,11 @@
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:usesCleartextTraffic="true"
-        android:theme="@style/Theme.WebStreamAndroidSdk">
+        android:theme="@style/Theme.WebStreamAndroidSdk"
+        android:usesCleartextTraffic="true">
+        <activity
+            android:name=".CameraRecordingGLViewActivity"
+            android:exported="false" />
         <activity
             android:name=".CameraRecordingActivity"
             android:exported="false" />

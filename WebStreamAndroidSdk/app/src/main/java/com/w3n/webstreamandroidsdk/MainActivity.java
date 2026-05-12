@@ -29,5 +29,9 @@ public class MainActivity extends AppCompatActivity {
         Button cameraRecordingButton = findViewById(R.id.cameraRecordingButton);
         cameraRecordingButton.setOnClickListener(v ->
                 startActivity(new Intent(MainActivity.this, CameraRecordingActivity.class)));
+
+        Button cameraRecordingGlViewButton = findViewById(R.id.cameraRecordingGlViewButton);
+        cameraRecordingGlViewButton.setOnClickListener(v ->
+                startActivity(new Intent(MainActivity.this, CameraRecordingGLViewActivity.class)));
     }
 }
