@@ -13,7 +13,6 @@ import android.os.HandlerThread;
 import android.os.Looper;
 import android.util.Log;
 import android.view.ViewGroup;
-import android.widget.ImageView;
 
 import com.w3n.webstream.Util.CameraController;
 
@@ -38,8 +37,7 @@ final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     private WebStreamVideoView attachedView;
-    private ImageView localPreviewImageView;
-    private Bitmap latestLocalPreviewBitmap;
+    private LocalVideoPreviewView localPreviewView;
     private HandlerThread frameThread;
     private Handler frameHandler;
     private CameraController cameraController;
@@ -80,13 +78,17 @@ final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
         Log.d(SdkConstants.TAG, "Attaching local video track. participantId=" + participantId);
         detach(attachedView);
         attachedView = view;
-        localPreviewImageView = new ImageView(view.getContext());
-        localPreviewImageView.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        localPreviewImageView.setAdjustViewBounds(false);
-        localPreviewImageView.setBackgroundColor(0xFF050606);
-        view.addView(localPreviewImageView, new ViewGroup.LayoutParams(
+        localPreviewView = new LocalVideoPreviewView(view.getContext());
+        view.addView(localPreviewView, new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT));
+        localPreviewView.bringToFront();
+        Log.d("ENCODER_PARVEZ", "Local preview view attached. parent="
+                + view.getWidth() + "x" + view.getHeight()
+                + ", child=" + localPreviewView.getWidth() + "x" + localPreviewView.getHeight());
+        localPreviewView.post(() -> Log.d("ENCODER_PARVEZ", "Local preview view laid out. parent="
+                + view.getWidth() + "x" + view.getHeight()
+                + ", child=" + localPreviewView.getWidth() + "x" + localPreviewView.getHeight()));
         startCamera();
     }
 
@@ -97,12 +99,11 @@ final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
         }
         Log.d(SdkConstants.TAG, "Detaching local video track. participantId=" + participantId);
         stopCamera();
-        if (localPreviewImageView != null) {
-            view.removeView(localPreviewImageView);
-            localPreviewImageView.setImageBitmap(null);
-            localPreviewImageView = null;
+        if (localPreviewView != null) {
+            localPreviewView.clearFrame();
+            view.removeView(localPreviewView);
+            localPreviewView = null;
         }
-        recycleLatestLocalPreviewBitmap();
         releaseH264Encoder();
         attachedView = null;
     }
@@ -112,10 +113,9 @@ final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
         Log.d(SdkConstants.TAG, "Local video track enabled=" + enabled);
         if (!enabled) {
             stopCamera();
-            if (localPreviewImageView != null) {
-                localPreviewImageView.setImageBitmap(null);
+            if (localPreviewView != null) {
+                localPreviewView.clearFrame();
             }
-            recycleLatestLocalPreviewBitmap();
             return;
         }
         startCamera();
@@ -213,9 +213,7 @@ final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
         }
 
         if (shouldUseH264BatchEncoding()) {
-            // Display local preview using CameraFrame, It done via custom view using opengl
-
-
+            updateLocalPreview(frame);
             encodeAndDispatchH264Frame(frame);
             return;
         }
@@ -452,32 +450,33 @@ final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
     }
 
     private void updateLocalPreview(Bitmap bitmap) {
-        if (bitmap == null || released || !enabled || localPreviewImageView == null) {
+        if (bitmap == null || released || !enabled || localPreviewView == null) {
             return;
         }
 
         Bitmap previewBitmap = bitmap.copy(Bitmap.Config.ARGB_8888, false);
         mainHandler.post(() -> {
-            if (released || localPreviewImageView == null) {
+            if (released || localPreviewView == null) {
                 previewBitmap.recycle();
                 return;
             }
 
-            Bitmap previousBitmap = latestLocalPreviewBitmap;
-            latestLocalPreviewBitmap = previewBitmap;
-            localPreviewImageView.setImageBitmap(previewBitmap);
-            if (previousBitmap != null && previousBitmap != previewBitmap) {
-                previousBitmap.recycle();
-            }
+            localPreviewView.renderBitmap(previewBitmap);
         });
     }
 
-    private void recycleLatestLocalPreviewBitmap() {
-        Bitmap bitmap = latestLocalPreviewBitmap;
-        latestLocalPreviewBitmap = null;
-        if (bitmap != null) {
-            bitmap.recycle();
+    private void updateLocalPreview(CameraController.CameraFrame frame) {
+        if (frame == null || released || !enabled || localPreviewView == null) {
+            return;
         }
+
+        mainHandler.post(() -> {
+            if (released || localPreviewView == null) {
+                return;
+            }
+
+            localPreviewView.renderCameraFrame(frame);
+        });
     }
 
     private void releaseH264Encoder() {
