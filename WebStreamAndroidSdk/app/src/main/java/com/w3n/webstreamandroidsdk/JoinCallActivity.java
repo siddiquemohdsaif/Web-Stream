@@ -92,6 +92,7 @@ public class JoinCallActivity extends AppCompatActivity {
                 .videoResolution(960, 540)
                 .frameRateFps(15)
                 .bitrateKbps(1200)
+                .imageFormat(WebStreamCallOptions.ImageFormat.H264)
                 .build();
 
         webStreamClient = new WebStreamClient.Builder(this)

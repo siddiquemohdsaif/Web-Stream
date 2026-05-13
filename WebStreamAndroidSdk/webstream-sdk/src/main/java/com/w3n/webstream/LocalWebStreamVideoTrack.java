@@ -8,25 +8,17 @@ import android.graphics.Canvas;
 import android.graphics.Matrix;
 import android.graphics.Rect;
 import android.graphics.RectF;
-import android.graphics.SurfaceTexture;
-import android.hardware.camera2.CameraAccessException;
-import android.hardware.camera2.CameraCaptureSession;
-import android.hardware.camera2.CameraCharacteristics;
-import android.hardware.camera2.CameraDevice;
-import android.hardware.camera2.CameraManager;
-import android.hardware.camera2.CaptureRequest;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Looper;
 import android.util.Log;
-import android.view.Surface;
-import android.view.TextureView;
 import android.view.ViewGroup;
 import android.widget.ImageView;
 
+import com.w3n.webstream.Util.CameraController;
+
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.util.Collections;
 
 final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
     interface FrameListener {
@@ -39,30 +31,20 @@ final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
                 long sequence);
     }
 
-    private static final int PREVIEW_WIDTH = 640;
-    private static final int PREVIEW_HEIGHT = 480;
-
     private final Context applicationContext;
     private final String participantId;
     private final WebStreamCallOptions options;
-    private final Runnable relayFrameRunnable = this::captureRelayFrame;
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     private WebStreamVideoView attachedView;
-    private TextureView textureView;
     private ImageView localPreviewImageView;
     private Bitmap latestLocalPreviewBitmap;
-    private HandlerThread cameraThread;
-    private Handler cameraHandler;
     private HandlerThread frameThread;
     private Handler frameHandler;
-    private CameraDevice cameraDevice;
-    private CameraCaptureSession captureSession;
+    private CameraController cameraController;
     private FrameListener frameListener;
     private H264FrameBatchEncoder h264FrameBatchEncoder;
-    private long frameSequence;
     private boolean enabled = true;
-    private boolean relayingFrames;
     private boolean released;
     private boolean useFrontCamera = true;
     private boolean loggedImageFormatFallback;
@@ -97,14 +79,6 @@ final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
         Log.d(SdkConstants.TAG, "Attaching local video track. participantId=" + participantId);
         detach(attachedView);
         attachedView = view;
-        textureView = new TextureView(view.getContext());
-        textureView.setSurfaceTextureListener(surfaceTextureListener);
-        textureView.addOnLayoutChangeListener((changedView, left, top, right, bottom,
-                oldLeft, oldTop, oldRight, oldBottom) ->
-                updateTextureTransform(right - left, bottom - top));
-        view.addView(textureView, new ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT));
         localPreviewImageView = new ImageView(view.getContext());
         localPreviewImageView.setScaleType(ImageView.ScaleType.CENTER_CROP);
         localPreviewImageView.setAdjustViewBounds(false);
@@ -112,11 +86,7 @@ final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
         view.addView(localPreviewImageView, new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT));
-        if (textureView.isAvailable()) {
-            updateTextureTransform(textureView.getWidth(), textureView.getHeight());
-            startCamera(textureView.getSurfaceTexture());
-        }
-        startFrameRelay();
+        startCamera();
     }
 
     @Override
@@ -125,13 +95,7 @@ final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
             return;
         }
         Log.d(SdkConstants.TAG, "Detaching local video track. participantId=" + participantId);
-        stopFrameRelay();
         stopCamera();
-        if (textureView != null) {
-            view.removeView(textureView);
-            textureView.setSurfaceTextureListener(null);
-            textureView = null;
-        }
         if (localPreviewImageView != null) {
             view.removeView(localPreviewImageView);
             localPreviewImageView.setImageBitmap(null);
@@ -146,7 +110,6 @@ final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
         this.enabled = enabled;
         Log.d(SdkConstants.TAG, "Local video track enabled=" + enabled);
         if (!enabled) {
-            stopFrameRelay();
             stopCamera();
             if (localPreviewImageView != null) {
                 localPreviewImageView.setImageBitmap(null);
@@ -154,10 +117,7 @@ final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
             recycleLatestLocalPreviewBitmap();
             return;
         }
-        if (textureView != null && textureView.isAvailable()) {
-            startCamera(textureView.getSurfaceTexture());
-        }
-        startFrameRelay();
+        startCamera();
     }
 
     void switchCamera() {
@@ -167,8 +127,8 @@ final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
         useFrontCamera = !useFrontCamera;
         Log.d(SdkConstants.TAG, "Switching camera. useFrontCamera=" + useFrontCamera);
         stopCamera();
-        if (enabled && textureView != null && textureView.isAvailable()) {
-            startCamera(textureView.getSurfaceTexture());
+        if (enabled && attachedView != null) {
+            startCamera();
         }
     }
 
@@ -182,34 +142,8 @@ final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
         this.frameListener = frameListener;
     }
 
-    private final TextureView.SurfaceTextureListener surfaceTextureListener =
-            new TextureView.SurfaceTextureListener() {
-                @Override
-                public void onSurfaceTextureAvailable(SurfaceTexture surface, int width, int height) {
-                    updateTextureTransform(width, height);
-                    startCamera(surface);
-                    startFrameRelay();
-                }
-
-                @Override
-                public void onSurfaceTextureSizeChanged(SurfaceTexture surface, int width, int height) {
-                    updateTextureTransform(width, height);
-                }
-
-                @Override
-                public boolean onSurfaceTextureDestroyed(SurfaceTexture surface) {
-                    stopFrameRelay();
-                    stopCamera();
-                    return true;
-                }
-
-                @Override
-                public void onSurfaceTextureUpdated(SurfaceTexture surface) {
-                }
-            };
-
-    private void startCamera(SurfaceTexture surfaceTexture) {
-        if (!enabled || released || surfaceTexture == null || cameraDevice != null) {
+    private void startCamera() {
+        if (!enabled || released || attachedView == null || cameraController != null) {
             return;
         }
         if (applicationContext.checkSelfPermission(Manifest.permission.CAMERA)
@@ -218,159 +152,31 @@ final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
             return;
         }
 
-        startCameraThread();
-        try {
-            CameraManager cameraManager =
-                    (CameraManager) applicationContext.getSystemService(Context.CAMERA_SERVICE);
-            String cameraId = findCameraId(cameraManager, useFrontCamera);
-            if (cameraId == null) {
-                Log.d(SdkConstants.TAG, "Camera start skipped; no camera found.");
-                return;
-            }
-            Log.d(SdkConstants.TAG, "Opening camera. cameraId=" + cameraId);
-            surfaceTexture.setDefaultBufferSize(PREVIEW_WIDTH, PREVIEW_HEIGHT);
-            cameraManager.openCamera(cameraId, cameraStateCallback(surfaceTexture), cameraHandler);
-        } catch (CameraAccessException | SecurityException ignored) {
-            stopCamera();
-        }
-    }
-
-    private void updateTextureTransform(int viewWidth, int viewHeight) {
-        if (textureView == null || viewWidth <= 0 || viewHeight <= 0) {
-            return;
-        }
-
-        Matrix matrix = new Matrix();
-        float viewCenterX = viewWidth * 0.5f;
-        float viewCenterY = viewHeight * 0.5f;
-        float scale = Math.max(
-                viewWidth / (float) PREVIEW_WIDTH,
-                viewHeight / (float) PREVIEW_HEIGHT);
-        float scaleX = PREVIEW_WIDTH * scale / viewWidth;
-        float scaleY = PREVIEW_HEIGHT * scale / viewHeight;
-        matrix.setScale(scaleX, scaleY, viewCenterX, viewCenterY);
-        textureView.setTransform(matrix);
-    }
-
-    private CameraDevice.StateCallback cameraStateCallback(SurfaceTexture surfaceTexture) {
-        return new CameraDevice.StateCallback() {
-            @Override
-            public void onOpened(CameraDevice camera) {
-                Log.d(SdkConstants.TAG, "Camera opened.");
-                cameraDevice = camera;
-                startPreview(surfaceTexture);
-            }
-
-            @Override
-            public void onDisconnected(CameraDevice camera) {
-                Log.d(SdkConstants.TAG, "Camera disconnected.");
-                camera.close();
-                cameraDevice = null;
-            }
-
-            @Override
-            public void onError(CameraDevice camera, int error) {
-                Log.d(SdkConstants.TAG, "Camera error=" + error);
-                camera.close();
-                cameraDevice = null;
-            }
-        };
-    }
-
-    private void startPreview(SurfaceTexture surfaceTexture) {
-        if (cameraDevice == null || surfaceTexture == null) {
-            return;
-        }
-        Surface surface = new Surface(surfaceTexture);
-        try {
-            CaptureRequest.Builder requestBuilder =
-                    cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
-            requestBuilder.addTarget(surface);
-            cameraDevice.createCaptureSession(
-                    Collections.singletonList(surface),
-                    new CameraCaptureSession.StateCallback() {
-                        @Override
-                        public void onConfigured(CameraCaptureSession session) {
-                            Log.d(SdkConstants.TAG, "Camera preview configured.");
-                            captureSession = session;
-                            try {
-                                session.setRepeatingRequest(requestBuilder.build(), null, cameraHandler);
-                            } catch (CameraAccessException ignored) {
-                                stopCamera();
-                            }
-                        }
-
-                        @Override
-                        public void onConfigureFailed(CameraCaptureSession session) {
-                            Log.d(SdkConstants.TAG, "Camera preview configuration failed.");
-                            stopCamera();
-                        }
-                    },
-                    cameraHandler);
-        } catch (CameraAccessException ignored) {
-            stopCamera();
-        }
-    }
-
-    private String findCameraId(CameraManager cameraManager, boolean front) throws CameraAccessException {
-        int targetFacing = front
-                ? CameraCharacteristics.LENS_FACING_FRONT
-                : CameraCharacteristics.LENS_FACING_BACK;
-        for (String cameraId : cameraManager.getCameraIdList()) {
-            CameraCharacteristics characteristics = cameraManager.getCameraCharacteristics(cameraId);
-            Integer facing = characteristics.get(CameraCharacteristics.LENS_FACING);
-            if (facing != null && facing == targetFacing) {
-                return cameraId;
-            }
-        }
-        String[] cameraIds = cameraManager.getCameraIdList();
-        return cameraIds.length > 0 ? cameraIds[0] : null;
-    }
-
-    private void startCameraThread() {
-        if (cameraThread != null) {
-            return;
-        }
-        Log.d(SdkConstants.TAG, "Starting camera thread.");
-        cameraThread = new HandlerThread("webstream-camera");
-        cameraThread.start();
-        cameraHandler = new Handler(cameraThread.getLooper());
+        Log.d(SdkConstants.TAG, "Starting camera controller. useFrontCamera=" + useFrontCamera);
+        startFrameThread();
+        cameraController = new CameraController(
+                applicationContext,
+                new CameraController.Config.Builder()
+                        .setSize(options.getVideoWidth(), options.getVideoHeight())
+                        .setFrameRateFps(options.getFrameRateFps())
+                        .setFrameType(CameraController.FrameType.BITMAP)
+                        .setCameraFacing(useFrontCamera
+                                ? CameraController.CameraFacing.FRONT
+                                : CameraController.CameraFacing.BACK)
+                        .setJpegQuality(options.getJpegQuality())
+                        .build(),
+                cameraCallback);
+        cameraController.start();
     }
 
     private void stopCamera() {
-        if (captureSession != null) {
-            Log.d(SdkConstants.TAG, "Closing camera capture session.");
-            captureSession.close();
-            captureSession = null;
+        CameraController controller = cameraController;
+        cameraController = null;
+        if (controller != null) {
+            Log.d(SdkConstants.TAG, "Releasing camera controller.");
+            controller.release();
         }
-        if (cameraDevice != null) {
-            Log.d(SdkConstants.TAG, "Closing camera device.");
-            cameraDevice.close();
-            cameraDevice = null;
-        }
-        if (cameraThread != null) {
-            Log.d(SdkConstants.TAG, "Stopping camera thread.");
-            cameraThread.quitSafely();
-            cameraThread = null;
-            cameraHandler = null;
-        }
-    }
-
-    private void startFrameRelay() {
-        if (relayingFrames || !enabled || released || textureView == null) {
-            return;
-        }
-        relayingFrames = true;
-        startFrameThread();
-        textureView.postDelayed(relayFrameRunnable, getRelayFrameIntervalMs());
-    }
-
-    private void stopFrameRelay() {
-        relayingFrames = false;
         frameEncodeInProgress = false;
-        if (textureView != null) {
-            textureView.removeCallbacks(relayFrameRunnable);
-        }
         if (frameThread != null) {
             Log.d(SdkConstants.TAG, "Stopping frame relay thread.");
             frameThread.quitSafely();
@@ -379,55 +185,64 @@ final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
         }
     }
 
-    private void captureRelayFrame() {
-        if (!relayingFrames || !enabled || released || textureView == null) {
+    private final CameraController.CameraCallback cameraCallback =
+            new CameraController.CameraCallback() {
+                @Override
+                public void onImageFrameAvailable(CameraController.CameraFrame frame) {
+                    handleCameraFrame(frame);
+                }
+
+                @Override
+                public void onCameraError(Exception error) {
+                    Log.d(SdkConstants.TAG, "Camera controller error: " + error.getMessage());
+                }
+            };
+
+    private void handleCameraFrame(CameraController.CameraFrame frame) {
+        if (frame == null || frame.bitmap == null) {
             return;
         }
-        if (!frameEncodeInProgress
-                && textureView.isAvailable()
-                && frameHandler != null
-                && frameListener != null) {
-            Bitmap bitmap = getAspectPreservingTextureBitmap(
-                    options.getVideoWidth(),
-                    options.getVideoHeight());
-            if (bitmap != null) {
-                long timestampMs = System.currentTimeMillis();
-                long sequence = ++frameSequence;
-                frameEncodeInProgress = true;
-                frameHandler.post(() -> encodeAndDispatchFrame(
-                        bitmap,
-                        options.getVideoWidth(),
-                        options.getVideoHeight(),
-                        timestampMs,
-                        sequence));
-            }
+        if (!enabled || released) {
+            frame.bitmap.recycle();
+            return;
         }
-        if (textureView != null) {
-            textureView.postDelayed(relayFrameRunnable, getRelayFrameIntervalMs());
+        if (frameEncodeInProgress || frameHandler == null || frameListener == null) {
+            frame.bitmap.recycle();
+            return;
         }
+
+        long timestampMs = frame.timestampNs > 0
+                ? frame.timestampNs / 1_000_000L
+                : System.currentTimeMillis();
+        Bitmap orientedBitmap = rotateBitmap(frame.bitmap, -90f);
+        frameEncodeInProgress = true;
+        frameHandler.post(() -> encodeAndDispatchFrame(
+                orientedBitmap,
+                options.getVideoWidth(),
+                options.getVideoHeight(),
+                timestampMs,
+                frame.sequence));
     }
 
-    private Bitmap getAspectPreservingTextureBitmap(int outputWidth, int outputHeight) {
-        int viewWidth = textureView.getWidth();
-        int viewHeight = textureView.getHeight();
-        if (viewWidth <= 0 || viewHeight <= 0 || outputWidth <= 0 || outputHeight <= 0) {
-            return textureView.getBitmap();
+    private Bitmap rotateBitmap(Bitmap source, float degrees) {
+        if (source == null || degrees == 0f) {
+            return source;
         }
 
-        float viewAspect = viewWidth / (float) viewHeight;
-        float outputAspect = outputWidth / (float) outputHeight;
-        int bitmapWidth;
-        int bitmapHeight;
-
-        if (viewAspect > outputAspect) {
-            bitmapHeight = outputHeight;
-            bitmapWidth = Math.round(bitmapHeight * viewAspect);
-        } else {
-            bitmapWidth = outputWidth;
-            bitmapHeight = Math.round(bitmapWidth / viewAspect);
+        Matrix matrix = new Matrix();
+        matrix.postRotate(degrees);
+        Bitmap rotated = Bitmap.createBitmap(
+                source,
+                0,
+                0,
+                source.getWidth(),
+                source.getHeight(),
+                matrix,
+                true);
+        if (rotated != source) {
+            source.recycle();
         }
-
-        return textureView.getBitmap(bitmapWidth, bitmapHeight);
+        return rotated;
     }
 
     private void encodeAndDispatchFrame(
@@ -648,9 +463,5 @@ final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
         frameThread = new HandlerThread("webstream-frame-relay");
         frameThread.start();
         frameHandler = new Handler(frameThread.getLooper());
-    }
-
-    private long getRelayFrameIntervalMs() {
-        return Math.max(33L, 1000L / Math.max(1, options.getFrameRateFps()));
     }
 }
