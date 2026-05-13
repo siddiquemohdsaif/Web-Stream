@@ -380,6 +380,7 @@ final class WebSocketTransport {
                     imageFormat,
                     width,
                     height,
+                    frameRateFps,
                     timestampMs,
                     sequence));
         }
@@ -449,6 +450,7 @@ final class WebSocketTransport {
                     imageFormat,
                     message.optInt("width", 0),
                     message.optInt("height", 0),
+                    message.optInt("frameRateFps", 15),
                     message.optLong("timestampMs", 0L),
                     message.optLong("sequence", 0L)));
         }

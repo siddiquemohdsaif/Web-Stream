@@ -210,6 +210,22 @@ public final class CameraController {
                     null,
                     bitmap);
         }
+
+        @Override
+        public String toString() {
+            return "CameraFrame{" +
+                    "width=" + width +
+                    ", height=" + height +
+                    ", timestampNs=" + timestampNs +
+                    ", sequence=" + sequence +
+                    ", frameType=" + frameType +
+                    ", yuvFormat=" + yuvFormat +
+                    ", yuv420Data=" + (yuv420Data != null ? yuv420Data.length + " bytes" : "null") +
+                    ", bitmap=" + (bitmap != null
+                    ? bitmap.getWidth() + "x" + bitmap.getHeight()
+                    : "null") +
+                    '}';
+        }
     }
 
     private static final String TAG = "CameraController";

@@ -3,6 +3,7 @@ package com.w3n.webstream.Util;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Looper;
+import android.util.Log;
 
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicReference;
@@ -262,6 +263,7 @@ public final class H264FrameBatchEncoder {
     }
 
     public void encodeFrame(byte[] inputYuvData, long timestampMs) {
+        Log.d("ENCODER_PARVEZ", "encodeFrame:inputYuvData "+inputYuvData.length+ " timestampMs "+ timestampMs);
         if (released || !started || nativeHandle == 0L) {
             return;
         }
@@ -384,6 +386,8 @@ public final class H264FrameBatchEncoder {
             return;
         }
 
+        Log.d("ENCODER_PARVEZ", "dispatchNativeBatch:batch "+batch.toString());
+
         callback.onBatchEncodeTimingAvailable(
                 batch.batchSequence,
                 batch.frameCount,
@@ -500,6 +504,19 @@ public final class H264FrameBatchEncoder {
             this.batchDurationNs = batchDurationNs;
             this.partialBatch = partialBatch;
         }
+
+        @Override
+        public String toString() {
+            return "NativeBatchResult{" +
+                    "encodedBatch=" + (encodedBatch != null ? encodedBatch.length + " bytes" : "null") +
+                    ", timestampMs=" + timestampMs +
+                    ", batchSequence=" + batchSequence +
+                    ", frameCount=" + frameCount +
+                    ", batchDurationNs=" + batchDurationNs +
+                    ", partialBatch=" + partialBatch +
+                    '}';
+        }
+
     }
 
     private static native long nativeCreate(

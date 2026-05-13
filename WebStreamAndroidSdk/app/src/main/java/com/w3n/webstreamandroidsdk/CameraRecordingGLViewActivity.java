@@ -26,6 +26,7 @@ import com.w3n.webstream.Util.H264FrameBatchDecoder;
 import com.w3n.webstream.Util.H264FrameBatchEncoder;
 
 import java.util.ArrayDeque;
+import java.util.Arrays;
 import java.util.Locale;
 import java.util.Queue;
 import java.util.Random;
@@ -210,6 +211,7 @@ public class CameraRecordingGLViewActivity extends AppCompatActivity {
             new CameraController.CameraCallback() {
                 @Override
                 public void onImageFrameAvailable(CameraController.CameraFrame frame) {
+                    Log.d("ENCODER_PARVEZ", "onImageFrameAvailable:frameType "+frame.toString());
                     cameraFrames++;
 
                     if (encoder != null && frame.yuv420Data != null) {

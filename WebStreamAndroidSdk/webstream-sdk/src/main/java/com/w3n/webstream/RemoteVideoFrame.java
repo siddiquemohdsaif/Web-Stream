@@ -8,6 +8,7 @@ final class RemoteVideoFrame {
     private final WebStreamCallOptions.ImageFormat imageFormat;
     private final int width;
     private final int height;
+    private final int frameRateFps;
     private final long timestampMs;
     private final long sequence;
 
@@ -17,6 +18,7 @@ final class RemoteVideoFrame {
             WebStreamCallOptions.ImageFormat imageFormat,
             int width,
             int height,
+            int frameRateFps,
             long timestampMs,
             long sequence) {
         this.participantId = participantId;
@@ -24,6 +26,7 @@ final class RemoteVideoFrame {
         this.imageFormat = imageFormat == null ? WebStreamCallOptions.ImageFormat.JPEG : imageFormat;
         this.width = width;
         this.height = height;
+        this.frameRateFps = Math.max(1, frameRateFps);
         this.timestampMs = timestampMs;
         this.sequence = sequence;
     }
@@ -48,6 +51,10 @@ final class RemoteVideoFrame {
         return height;
     }
 
+    int getFrameRateFps() {
+        return frameRateFps;
+    }
+
     long getTimestampMs() {
         return timestampMs;
     }
@@ -63,6 +70,7 @@ final class RemoteVideoFrame {
                 ", imageFormat=" + imageFormat +
                 ", width=" + width +
                 ", height=" + height +
+                ", frameRateFps=" + frameRateFps +
                 ", timestampMs=" + timestampMs +
                 ", sequence=" + sequence +
                 ", encodedDataLength=" + (encodedData != null ? encodedData.length : 0) +
