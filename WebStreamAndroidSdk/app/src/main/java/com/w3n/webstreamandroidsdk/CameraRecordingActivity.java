@@ -316,33 +316,37 @@ public class CameraRecordingActivity extends AppCompatActivity {
             new H264FrameBatchDecoder.Callback() {
                 @Override
                 public void onImageAvailable(H264FrameBatchDecoder.DecodedFrame frame) {
-                    decodedFrames = frame.sequence;
+                    try {
+                        decodedFrames = frame.sequence;
 
-                    recordDecodedFrameForBatchTiming();
+                        recordDecodedFrameForBatchTiming();
 
-                    Bitmap bitmap = null;
+                        Bitmap bitmap = null;
 
-                    Log.d(TAG,
-                            "Decoded image available. sequence="
-                                    + frame.sequence
-                                    + ", width=" + frame.width
-                                    + ", height=" + frame.height
-                                    + ", timestampNs=" + frame.timestampNs
-                                    + ", decodedBatches=" + decodedBatches);
+                        Log.d(TAG,
+                                "Decoded image available. sequence="
+                                        + frame.sequence
+                                        + ", width=" + frame.width
+                                        + ", height=" + frame.height
+                                        + ", timestampNs=" + frame.timestampNs
+                                        + ", decodedBatches=" + decodedBatches);
 
-                    runOnUiThread(() -> {
-                        if (bitmap != null) {
-                            Bitmap previousBitmap = latestDecodedPreviewBitmap;
-                            latestDecodedPreviewBitmap = bitmap;
-                            decodedPreviewImage.setImageBitmap(bitmap);
-                            if (previousBitmap != null
-                                    && previousBitmap != bitmap
-                                    && !previousBitmap.isRecycled()) {
-                                previousBitmap.recycle();
+                        runOnUiThread(() -> {
+                            if (bitmap != null) {
+                                Bitmap previousBitmap = latestDecodedPreviewBitmap;
+                                latestDecodedPreviewBitmap = bitmap;
+                                decodedPreviewImage.setImageBitmap(bitmap);
+                                if (previousBitmap != null
+                                        && previousBitmap != bitmap
+                                        && !previousBitmap.isRecycled()) {
+                                    previousBitmap.recycle();
+                                }
                             }
-                        }
-                        updateDetails();
-                    });
+                            updateDetails();
+                        });
+                    } finally {
+                        frame.release();
+                    }
                 }
 
                 @Override

@@ -4,6 +4,7 @@ project(webstream_jxl)
 
 add_library(webstream_h264 SHARED
         webstream_h264/common.cpp
+        webstream_h264/decoder_state.cpp
         webstream_h264/encoder_state.cpp
         webstream_h264/jni_bindings.cpp
         webstream_h264/yuv_image.cpp)

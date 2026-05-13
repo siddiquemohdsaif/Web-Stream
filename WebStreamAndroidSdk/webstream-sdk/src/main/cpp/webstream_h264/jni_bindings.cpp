@@ -1,9 +1,11 @@
 #include "common.h"
+#include "decoder_state.h"
 #include "encoder_state.h"
 #include "yuv_image.h"
 
 #include <jni.h>
 
+#include <cstdlib>
 #include <memory>
 #include <string>
 #include <vector>
@@ -15,6 +17,8 @@ using webstream::h264::CAMERA_FRAME_NV21;
 using webstream::h264::CameraFrameType;
 using webstream::h264::CreateCameraFrame;
 using webstream::h264::CreateYuvImageBitmap;
+using webstream::h264::DecoderFromHandle;
+using webstream::h264::DecoderState;
 using webstream::h264::EncoderState;
 using webstream::h264::EnumOrdinal;
 using webstream::h264::FromHandle;
@@ -151,6 +155,99 @@ extern "C" JNIEXPORT jlong JNICALL
 Java_com_w3n_webstream_Util_H264FrameBatchEncoder_nativeGetBatchSequence(JNIEnv*, jclass, jlong handle) {
     EncoderState* state = FromHandle(handle);
     return state == nullptr ? 0 : static_cast<jlong>(state->BatchSequence());
+}
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_w3n_webstream_Util_H264FrameBatchDecoder_nativeCreate(
+        JNIEnv* env,
+        jclass,
+        jint width,
+        jint height,
+        jint frameRateFps,
+        jint maxQueuedFrames) {
+    if (width <= 0 || height <= 0 || (width % 2) != 0 || (height % 2) != 0) {
+        ThrowJava(env, "java/lang/IllegalArgumentException",
+                  "H.264 frame dimensions must be positive even values.");
+        return 0;
+    }
+
+    auto state = std::make_unique<DecoderState>(
+            width,
+            height,
+            frameRateFps,
+            maxQueuedFrames);
+    return reinterpret_cast<jlong>(state.release());
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_w3n_webstream_Util_H264FrameBatchDecoder_nativeStart(JNIEnv* env, jclass, jlong handle) {
+    DecoderState* state = DecoderFromHandle(handle);
+    if (state == nullptr) {
+        ThrowJava(env, "java/lang/IllegalStateException", "Native decoder handle is null.");
+        return;
+    }
+
+    std::string error;
+    if (!state->Start(&error)) {
+        ThrowJava(env, "java/lang/IllegalStateException", error);
+    }
+}
+
+extern "C" JNIEXPORT jobjectArray JNICALL
+Java_com_w3n_webstream_Util_H264FrameBatchDecoder_nativeDecodeChunk(
+        JNIEnv* env,
+        jclass,
+        jlong handle,
+        jbyteArray encodedChunk) {
+    DecoderState* state = DecoderFromHandle(handle);
+    if (state == nullptr) {
+        ThrowJava(env, "java/lang/IllegalStateException", "Native decoder handle is null.");
+        return nullptr;
+    }
+
+    jobjectArray result = nullptr;
+    std::string error;
+    if (!state->Decode(env, encodedChunk, &result, &error)) {
+        ThrowJava(env, "java/lang/IllegalStateException", error);
+        return nullptr;
+    }
+    return result;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_w3n_webstream_Util_H264FrameBatchDecoder_nativeStop(JNIEnv*, jclass, jlong handle) {
+    DecoderState* state = DecoderFromHandle(handle);
+    if (state != nullptr) {
+        state->Stop();
+    }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_w3n_webstream_Util_H264FrameBatchDecoder_nativeRelease(JNIEnv*, jclass, jlong handle) {
+    DecoderState* state = DecoderFromHandle(handle);
+    delete state;
+}
+
+extern "C" JNIEXPORT jobject JNICALL
+Java_com_w3n_webstream_Util_H264FrameBatchDecoder_nativeWrapBuffer(
+        JNIEnv* env,
+        jclass,
+        jlong nativeBufferPtr,
+        jint size) {
+    if (nativeBufferPtr == 0 || size <= 0) {
+        return nullptr;
+    }
+    return env->NewDirectByteBuffer(reinterpret_cast<void*>(nativeBufferPtr), size);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_w3n_webstream_Util_H264FrameBatchDecoder_nativeReleaseFrameBuffer(
+        JNIEnv*,
+        jclass,
+        jlong nativeBufferPtr) {
+    if (nativeBufferPtr != 0) {
+        std::free(reinterpret_cast<void*>(nativeBufferPtr));
+    }
 }
 
 extern "C" JNIEXPORT jobject JNICALL

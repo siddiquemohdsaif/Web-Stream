@@ -131,13 +131,18 @@ public final class YuvFrameRenderer implements GLSurfaceView.Renderer {
             return;
         }
 
-        YuvPlanes planes = extractYuvPlanes(
-                frame.buffer,
-                frame.mediaFormat,
-                frame.width,
-                frame.height,
-                uvSwapped
-        );
+        YuvPlanes planes;
+        try {
+            planes = extractYuvPlanes(
+                    frame.buffer,
+                    frame.mediaFormat,
+                    frame.width,
+                    frame.height,
+                    uvSwapped
+            );
+        } finally {
+            frame.release();
+        }
 
         synchronized (frameLock) {
             pendingFrame = planes;

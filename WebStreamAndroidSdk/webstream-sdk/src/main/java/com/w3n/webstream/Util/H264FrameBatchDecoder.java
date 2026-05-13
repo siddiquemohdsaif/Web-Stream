@@ -1,7 +1,6 @@
 package com.w3n.webstream.Util;
 
 import android.media.MediaCodec;
-import android.media.MediaCodecInfo;
 import android.media.MediaFormat;
 import android.os.Handler;
 import android.os.HandlerThread;
@@ -19,6 +18,19 @@ import java.util.Map;
 import java.util.Queue;
 
 public final class H264FrameBatchDecoder {
+    private static final String LIBRARY_NAME = "webstream_h264";
+    private static final boolean LIBRARY_LOADED;
+
+    static {
+        boolean loaded;
+        try {
+            System.loadLibrary(LIBRARY_NAME);
+            loaded = true;
+        } catch (UnsatisfiedLinkError ignored) {
+            loaded = false;
+        }
+        LIBRARY_LOADED = loaded;
+    }
 
     public enum FrameFormat {
         /**
@@ -178,6 +190,17 @@ public final class H264FrameBatchDecoder {
 
         public final FrameFormat frameFormat;
 
+        /**
+         * Native heap pointer that owns the decoded output bytes.
+         * <p>
+         * The pointer remains valid until release() is called. This lets a native
+         * graphics path consume the frame without copying through a Java byte[].
+         */
+        public final long nativeBufferPtr;
+        public final int nativeBufferSize;
+
+        private volatile boolean nativeBufferReleased;
+
         private DecodedFrame(
                 int width,
                 int height,
@@ -198,6 +221,51 @@ public final class H264FrameBatchDecoder {
             this.size = size;
             this.mediaFormat = mediaFormat;
             this.frameFormat = frameFormat;
+            this.nativeBufferPtr = 0L;
+            this.nativeBufferSize = 0;
+            this.nativeBufferReleased = true;
+        }
+
+        private DecodedFrame(
+                int width,
+                int height,
+                long timestampNs,
+                long sequence,
+                long nativeBufferPtr,
+                int size,
+                MediaFormat mediaFormat,
+                FrameFormat frameFormat
+        ) {
+            this.width = width;
+            this.height = height;
+            this.timestampNs = timestampNs;
+            this.sequence = sequence;
+            this.nativeBufferPtr = nativeBufferPtr;
+            this.nativeBufferSize = size;
+            this.buffer = nativeBufferPtr == 0L || size <= 0
+                    ? null
+                    : nativeWrapBuffer(nativeBufferPtr, size);
+            this.offset = 0;
+            this.size = size;
+            this.mediaFormat = mediaFormat;
+            this.frameFormat = frameFormat;
+            this.nativeBufferReleased = nativeBufferPtr == 0L;
+        }
+
+        public void release() {
+            if (!nativeBufferReleased && nativeBufferPtr != 0L) {
+                nativeBufferReleased = true;
+                nativeReleaseFrameBuffer(nativeBufferPtr);
+            }
+        }
+
+        @Override
+        protected void finalize() throws Throwable {
+            try {
+                release();
+            } finally {
+                super.finalize();
+            }
         }
     }
 
@@ -240,6 +308,8 @@ public final class H264FrameBatchDecoder {
     private boolean initialized;
     private boolean started;
     private boolean released;
+    private volatile long nativeHandle;
+    private final Object nativeDecodeLock = new Object();
 
     public static volatile long decoderFrameReceived = 0;
     public static volatile long dispatchedFrames = 0;
@@ -348,8 +418,22 @@ public final class H264FrameBatchDecoder {
         }
 
         try {
-            decoder = MediaCodec.createDecoderByType(
-                    MediaFormat.MIMETYPE_VIDEO_AVC
+            if (nativeHandle != 0L) {
+                uiRenderHandler = new Handler(Looper.getMainLooper());
+                initialized = true;
+                return;
+            }
+
+            if (!LIBRARY_LOADED) {
+                throw new IllegalStateException(
+                        "Native H.264 library " + LIBRARY_NAME + " could not be loaded."
+                );
+            }
+            nativeHandle = nativeCreate(
+                    config.width,
+                    config.height,
+                    config.frameRateFps,
+                    config.maxQueuedFrames
             );
             uiRenderHandler = new Handler(Looper.getMainLooper());
             initialized = true;
@@ -379,7 +463,7 @@ public final class H264FrameBatchDecoder {
             initialize();
         }
 
-        if (decoder == null) {
+        if (nativeHandle == 0L) {
             callback.onDecoderError(
                     new IllegalStateException("Decoder initialization failed.")
             );
@@ -387,30 +471,7 @@ public final class H264FrameBatchDecoder {
         }
 
         try {
-            MediaFormat format = MediaFormat.createVideoFormat(
-                    MediaFormat.MIMETYPE_VIDEO_AVC,
-                    config.width,
-                    config.height
-            );
-
-            /**
-             * Byte-buffer output mode.
-             *
-             * This requests YUV output buffers instead of Surface rendering.
-             */
-            format.setInteger(
-                    MediaFormat.KEY_COLOR_FORMAT,
-                    MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible
-            );
-
-            decoder.configure(
-                    format,
-                    null,
-                    null,
-                    0
-            );
-
-            decoder.start();
+            nativeStart(nativeHandle);
 
             inputChunkSequence = 0L;
             decodedFrameSequence = 0L;
@@ -447,7 +508,7 @@ public final class H264FrameBatchDecoder {
      * then emits decoded frames at configured FPS.
      */
     public void onDecodeChunk(byte[] encodedChunk) {
-        if (released || !started || decoder == null) {
+        if (released || !started || nativeHandle == 0L) {
             return;
         }
 
@@ -455,22 +516,21 @@ public final class H264FrameBatchDecoder {
             return;
         }
 
-        decoderFrameReceived += 5;
+//        decoderFrameReceived += 5;
 
         Handler handler = getDecoderHandler();
 
         handler.post(() -> {
             long batchStartMs = System.currentTimeMillis();
             long batchStartNs = System.nanoTime();
-            List<byte[]> accessUnits = splitAnnexBAccessUnits(encodedChunk);
-            Log.d("DECODER_QQ", "onDecodeChunk:Split Time "+(System.currentTimeMillis() - batchStartMs)+" accessUnit size="+accessUnits.size());
-            for (byte[] accessUnit : accessUnits) {
-                decodeChunkInternal(accessUnit);
+            DecodedFrame[] frames;
+            synchronized (nativeDecodeLock) {
+                frames = nativeDecodeChunk(nativeHandle, encodedChunk);
             }
-            Log.d("DECODER_QQ", "onDecodeChunk:Byte Decode Time "+(System.currentTimeMillis() - batchStartMs));
+            int accessUnitCount = frames == null ? 0 : frames.length;
 
-            frameDecoded = 0;
-            drainDecoder();
+            decoderFrameReceived += frames.length;
+            Log.d("DECODER_QQ", "onDecodeChunk:Native Decode Time "+(System.currentTimeMillis() - batchStartMs));
 
             Log.d("DECODER_P", "onDecodeChunk: frameDecoded " + frameDecoded);
 
@@ -484,6 +544,14 @@ public final class H264FrameBatchDecoder {
             long decodedFrameCount;
 
             synchronized (H264FrameBatchDecoder.this) {
+                if (frames != null) {
+                    for (DecodedFrame frame : frames) {
+                        if (frame == null) {
+                            continue;
+                        }
+                        queueDecodedFrame(frame);
+                    }
+                }
                 queuedDecodedFrameCount = decodedFrameQueue.size();
                 decodedFrameCount = decodedFrameSequence;
             }
@@ -492,7 +560,7 @@ public final class H264FrameBatchDecoder {
                     TAG,
                     "H.264 decode batch handled. batchSequence="
                             + batchSequence
-                            + ", accessUnits=" + accessUnits.size()
+                            + ", accessUnits=" + accessUnitCount
                             + ", durationMs="
                             + String.format(
                             Locale.US,
@@ -505,12 +573,34 @@ public final class H264FrameBatchDecoder {
 
             callback.onDecodeBatchHandled(
                     batchSequence,
-                    accessUnits.size(),
+                    accessUnitCount,
                     handledDurationNs,
                     decodedFrameCount,
                     queuedDecodedFrameCount
             );
         });
+    }
+
+    /**
+     * Synchronous native batch decode.
+     * <p>
+     * The returned frames own native buffers. The caller must call
+     * DecodedFrame.release() after the graphics layer has consumed each frame.
+     */
+    public DecodedFrame[] decodeChunk(byte[] encodedChunk) {
+        if (released || !started || nativeHandle == 0L) {
+            return new DecodedFrame[0];
+        }
+
+        if (encodedChunk == null || encodedChunk.length == 0) {
+            return new DecodedFrame[0];
+        }
+
+        DecodedFrame[] frames;
+        synchronized (nativeDecodeLock) {
+            frames = nativeDecodeChunk(nativeHandle, encodedChunk);
+        }
+        return frames == null ? new DecodedFrame[0] : frames;
     }
 
     /**
@@ -530,18 +620,10 @@ public final class H264FrameBatchDecoder {
         }
 
         try {
-            if (decoder != null) {
-                try {
-                    decoder.stop();
-                } catch (RuntimeException ignored) {
+            if (nativeHandle != 0L) {
+                synchronized (nativeDecodeLock) {
+                    nativeStop(nativeHandle);
                 }
-
-                try {
-                    decoder.release();
-                } catch (RuntimeException ignored) {
-                }
-
-                decoder = null;
             }
 
             synchronized (this) {
@@ -575,6 +657,13 @@ public final class H264FrameBatchDecoder {
         stopDecoderThread();
         stopRenderThread();
 
+        if (nativeHandle != 0L) {
+            synchronized (nativeDecodeLock) {
+                nativeRelease(nativeHandle);
+            }
+            nativeHandle = 0L;
+        }
+
         released = true;
         started = false;
         initialized = false;
@@ -600,309 +689,24 @@ public final class H264FrameBatchDecoder {
         return renderedFrameSequence;
     }
 
-    private void decodeChunkInternal(byte[] encodedChunk) {
-        if (released || !started || decoder == null) {
-            return;
-        }
-
-        try {
-            long decodeChunkStartMs = System.currentTimeMillis();
-
-            inputChunkSequence++;
-
-//            drainDecoder();
-
-            long inputBufferStartMs = System.currentTimeMillis();
-            int inputIndex = decoder.dequeueInputBuffer(DEQUEUE_TIMEOUT_US);
-
-            if (inputIndex < 0) {
-                return;
-            }
-
-            ByteBuffer inputBuffer = decoder.getInputBuffer(inputIndex);
-
-            if (inputBuffer == null) {
-                return;
-            }
-
-            inputBuffer.clear();
-
-            if (encodedChunk.length > inputBuffer.remaining()) {
-                throw new IllegalStateException(
-                        "H.264 decoder input buffer is too small. required="
-                                + encodedChunk.length
-                                + ", available="
-                                + inputBuffer.remaining()
-                );
-            }
-
-            inputBuffer.put(encodedChunk);
-
-            Log.d("DECODER_QQ", "decodeChunkInternal: Input buffer Time "+(System.currentTimeMillis() - inputBufferStartMs));
-
-            long presentationTimeUs = System.nanoTime() / 1000L;
-
-            /**
-             * Raw MediaCodec decode start time.
-             *
-             * This is captured immediately before queueInputBuffer().
-             */
-            long rawDecodeStartNs = System.nanoTime();
-
-            long rawDecodeStartMs = System.currentTimeMillis();
-
-            synchronized (rawDecodeStartTimeByPresentationUs) {
-                rawDecodeStartTimeByPresentationUs.put(
-                        presentationTimeUs,
-                        rawDecodeStartNs
-                );
-            }
-
-            Log.d("DECODER_QQ", "decodeChunkInternal: Raw Decode Sync Time "+(System.currentTimeMillis() - rawDecodeStartMs));
-
-            decoder.queueInputBuffer(
-                    inputIndex,
-                    0,
-                    encodedChunk.length,
-                    presentationTimeUs,
-                    0
-            );
-            Log.d("DECODER_QQ", "decodeChunkInternal: Input buffer Time "+(System.currentTimeMillis() - inputBufferStartMs));
-
-//            drainDecoder();
-
-            Log.d("DECODER_QQ", "decodeChunkInternal: decode Chunk Time "+(System.currentTimeMillis() - decodeChunkStartMs));
-
-        } catch (Exception error) {
-            callback.onDecoderError(error);
-        }
-    }
-
-    private void drainDecoder() {
-        if (decoder == null) {
-            return;
-        }
-
-        while (true) {
-            int outputIndex = decoder.dequeueOutputBuffer(
-                    bufferInfo,
-                    DEQUEUE_TIMEOUT_US
-            );
-
-            /**
-             * Capture end time immediately after dequeueOutputBuffer returns.
-             *
-             * If outputIndex >= 0, MediaCodec has produced decoded output.
-             */
-            long rawDecodeEndNs = System.nanoTime();
-
-            long drainStartMs = System.currentTimeMillis();
-
-            if (outputIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                return;
-            }
-
-            if (outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                outputFormat = decoder.getOutputFormat();
-
-                Log.d(
-                        TAG,
-                        "H.264 decoder output format changed. format="
-                                + outputFormat
-                );
-
-                continue;
-            }
-
-            if (outputIndex < 0) {
-                continue;
-            }
-
-            try {
-                if (bufferInfo.size > 0) {
-                    Long rawDecodeStartNs;
-
-                    synchronized (rawDecodeStartTimeByPresentationUs) {
-                        rawDecodeStartNs = rawDecodeStartTimeByPresentationUs.remove(
-                                bufferInfo.presentationTimeUs
-                        );
-                    }
-
-                    if (rawDecodeStartNs != null) {
-                        long rawDecodeDurationNs = rawDecodeEndNs - rawDecodeStartNs;
-
-                        callback.onRawMediaCodecDecodeTimingAvailable(
-                                decodedFrameSequence + 1,
-                                rawDecodeDurationNs
-                        );
-
-                        Log.d(
-                                TAG,
-                                "Raw MediaCodec decode timing. presentationTimeUs="
-                                        + bufferInfo.presentationTimeUs
-                                        + ", durationMs="
-                                        + String.format(
-                                        Locale.US,
-                                        "%.3f",
-                                        rawDecodeDurationNs / 1_000_000.0
-                                )
-                        );
-                    }
-
-                    ByteBuffer outputBuffer = decoder.getOutputBuffer(outputIndex);
-
-                    if (outputBuffer != null) {
-                        MediaFormat frameMediaFormat = decoder.getOutputFormat(outputIndex);
-
-                        if (frameMediaFormat == null) {
-                            frameMediaFormat = outputFormat;
-                        }
-
-                        queueDecodedBuffer(outputBuffer, frameMediaFormat);
-                    }
-                }
-            } finally {
-                long decoderReleaseStart = System.currentTimeMillis();
-
-                /**
-                 * false because we are using byte-buffer output mode, not Surface rendering.
-                 */
-                decoder.releaseOutputBuffer(
-                        outputIndex,
-                        false
-                );
-
-                Log.d(
-                        "DECODER_S",
-                        "drainDecoder: decoder ReleaseTime "
-                                + (System.currentTimeMillis() - decoderReleaseStart)
-                );
-
-                Log.d(
-                        "DECODER_QQ",
-                        "drainDecoder: Drain decoder Time "
-                                + (System.currentTimeMillis() - drainStartMs)
-                );
-            }
-        }
-    }
-
-    /**
-     * Copies MediaCodec output ByteBuffer into a safe direct ByteBuffer
-     * and queues it for onImageAvailable(...).
-     * <p>
-     * IMPORTANT:
-     * MediaCodec owns outputBuffer. You must not store outputBuffer directly.
-     * After releaseOutputBuffer(...), the original outputBuffer is invalid.
-     */
-    private void queueDecodedBuffer(
-            ByteBuffer outputBuffer,
-            MediaFormat mediaFormat
-    ) {
-        try {
-            long copyStartMs = System.currentTimeMillis();
-
-            ByteBuffer copiedBuffer = copyCodecOutputBuffer(
-                    outputBuffer,
-                    bufferInfo
-            );
-
-            DecodedFrame frame = new DecodedFrame(
-                    config.width,
-                    config.height,
-                    bufferInfo.presentationTimeUs * 1000L,
-                    ++decodedFrameSequence,
-                    copiedBuffer,
-                    0,
-                    copiedBuffer.remaining(),
-                    mediaFormat,
-                    FrameFormat.CODEC_OUTPUT_YUV
-            );
-
-            long copyEndMs = System.currentTimeMillis();
-
-            Log.d(
-                    "DECODER_S",
-                    "queueDecodedBuffer: copied ByteBuffer time "
-                            + (copyEndMs - copyStartMs)
-                            + " ms, size="
-                            + frame.size
-            );
-
-            synchronized (this) {
-                long imageOfferStart = System.currentTimeMillis();
-
-//                while (decodedFrameQueue.size() >= config.maxQueuedFrames) {
-//                    DecodedFrame droppedFrame = decodedFrameQueue.poll();
-//
-//                    if (droppedFrame == null) {
-//                        break;
-//                    }
-//
-//                    callback.onDecodedFrameDropped(
-//                            droppedFrame.sequence,
-//                            decodedFrameQueue.size()
-//                    );
-//                }
-
-                frameDecoded++;
-                imagesOnBuffer++;
-
-                decodedFrameQueue.offer(frame);
-                Log.d("DECODER_P", "queueDecodedBuffer: decodedFrameQueue "+decodedFrameQueue.size()+" imagesOnBuffer="+imagesOnBuffer);
-
-                Log.d(
-                        "DECODER_S",
-                        "queueDecodedBuffer: ImageOffering time "
-                                + (System.currentTimeMillis() - imageOfferStart)
-                );
-            }
-
-        } catch (Exception error) {
-            callback.onDecoderError(error);
-        }
-    }
-
-    private static ByteBuffer copyCodecOutputBuffer(
-            ByteBuffer outputBuffer,
-            MediaCodec.BufferInfo bufferInfo
-    ) {
-        ByteBuffer duplicate = outputBuffer.duplicate();
-
-        duplicate.position(bufferInfo.offset);
-        duplicate.limit(bufferInfo.offset + bufferInfo.size);
-
-        ByteBuffer copy = ByteBuffer.allocateDirect(bufferInfo.size);
-        copy.put(duplicate);
-        copy.position(0);
-        copy.limit(bufferInfo.size);
-
-        return copy;
-    }
 
     private void clearDecodedFrameQueue() {
+        for (DecodedFrame frame : decodedFrameQueue) {
+            if (frame != null) {
+                frame.release();
+            }
+        }
         decodedFrameQueue.clear();
     }
 
-    private double getAvailablePlaybackSecondsLocked() {
-        return decodedFrameQueue.size() / (double) config.frameRateFps;
+    private void queueDecodedFrame(DecodedFrame frame) {
+        frameDecoded++;
+        imagesOnBuffer++;
+        decodedFrameSequence = Math.max(decodedFrameSequence, frame.sequence);
+        decodedFrameQueue.offer(frame);
     }
 
-    private double getPlaybackSpeedForBufferSeconds(double availablePlaybackSec) {
-        if (availablePlaybackSec <= 0.25) {
-            return 0.90;
-        } else if (availablePlaybackSec <= 0.75) {
-            return 1.00;
-        } else if (availablePlaybackSec <= 1.00) {
-            return 1.05;
-        } else if (availablePlaybackSec <= 1.50) {
-            return 1.10;
-        } else if (availablePlaybackSec <= 2.00) {
-            return 1.25;
-        } else {
-            return 1.50;
-        }
-    }
+
 
     private void resetPlaybackPid() {
         playbackPidIntegral = 0.0;
@@ -1183,4 +987,22 @@ public final class H264FrameBatchDecoder {
             this.type = type;
         }
     }
+
+    private static native long nativeCreate(
+            int width,
+            int height,
+            int frameRateFps,
+            int maxQueuedFrames);
+
+    private static native void nativeStart(long handle);
+
+    public static native DecodedFrame[] nativeDecodeChunk(long handle, byte[] encodedChunk);
+
+    private static native void nativeStop(long handle);
+
+    private static native void nativeRelease(long handle);
+
+    private static native ByteBuffer nativeWrapBuffer(long nativeBufferPtr, int size);
+
+    private static native void nativeReleaseFrameBuffer(long nativeBufferPtr);
 }
