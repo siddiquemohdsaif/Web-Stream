@@ -27,6 +27,9 @@ import com.w3n.webstream.WebStreamVideoView;
 
 public class WebStreamActivity extends AppCompatActivity {
     private static final int TARGET_VIDEO_FPS = 15;
+    private static final int WEBSTREAM_VIDEO_WIDTH = 1280;
+    private static final int WEBSTREAM_VIDEO_HEIGHT = 720;
+    private static final int WEBSTREAM_VIDEO_BITRATE_KBPS = 1200;
 
     private EditText userIdInput;
     private EditText callIdInput;
@@ -90,6 +93,7 @@ public class WebStreamActivity extends AppCompatActivity {
         muteButton = findViewById(R.id.webStreamMuteButton);
         cameraButton = findViewById(R.id.webStreamCameraButton);
         switchCameraButton = findViewById(R.id.webStreamSwitchCameraButton);
+        keepOverlayComponentsAboveRemoteVideo();
     }
 
     private void applySystemInsets() {
@@ -198,19 +202,19 @@ public class WebStreamActivity extends AppCompatActivity {
         updateControlLabels();
         setStatus("Starting webStream call...");
 
-        WebStreamCallOptions options = new WebStreamCallOptions.Builder()
-                .videoResolution(720, 1280)
-                .frameRateFps(15)
-                .bitrateKbps(1200)
+        WebStreamCallOptions callOptions = new WebStreamCallOptions.Builder()
+                .videoResolution(WEBSTREAM_VIDEO_WIDTH, WEBSTREAM_VIDEO_HEIGHT)
+                .frameRateFps(TARGET_VIDEO_FPS)
+                .bitrateKbps(WEBSTREAM_VIDEO_BITRATE_KBPS)
                 .imageFormat(WebStreamCallOptions.ImageFormat.H264)
                 .build();
 
         webStreamClient = new WebStreamClient.Builder(this)
                 .userId(userId)
-                .defaultCallOptions(options)
+                .displayName(userId)
                 .build();
 
-        webStreamCall = webStreamClient.joinCall(callId, new WebStreamCallListener() {
+        webStreamCall = webStreamClient.joinCall(callId, callOptions, new WebStreamCallListener() {
             @Override
             public void onConnecting() {
                 setStatus("Connecting to webStream server...");
@@ -228,6 +232,11 @@ public class WebStreamActivity extends AppCompatActivity {
 
             @Override
             public void onDisconnected() {
+                webStreamCall = null;
+                if (webStreamClient != null) {
+                    webStreamClient.release();
+                    webStreamClient = null;
+                }
                 if (componentSession != null) {
                     InternetSpeedRecorderUtil.Result internetResult =
                             ComponentManager.finishComponentSession(componentSession);
@@ -237,6 +246,9 @@ public class WebStreamActivity extends AppCompatActivity {
                     setStatus("Disconnected.");
                 }
                 clearLocalVideo();
+                muted = false;
+                cameraEnabled = true;
+                updateControlLabels();
                 updateCallControls(false);
             }
 
@@ -250,6 +262,7 @@ public class WebStreamActivity extends AppCompatActivity {
             public void onRemoteVideoAvailable(WebStreamVideoTrack track) {
                 remoteVideoView.addTrack(track);
                 remotePlaceholder.setVisibility(View.GONE);
+                keepOverlayComponentsAboveRemoteVideo();
                 if (componentSession == null) {
                     componentSession = ComponentManager.startWebStreamComponentSession(getApplicationContext());
                 }
@@ -291,8 +304,16 @@ public class WebStreamActivity extends AppCompatActivity {
             public void onError(Throwable error) {
                 ComponentManager.finishComponentSession(componentSession);
                 componentSession = null;
-                setStatus(error.getMessage());
+                webStreamCall = null;
+                if (webStreamClient != null) {
+                    webStreamClient.release();
+                    webStreamClient = null;
+                }
+                setStatus(error.getMessage() == null ? "webStream call failed." : error.getMessage());
                 clearLocalVideo();
+                muted = false;
+                cameraEnabled = true;
+                updateControlLabels();
                 updateCallControls(false);
             }
         });
@@ -335,9 +356,7 @@ public class WebStreamActivity extends AppCompatActivity {
         }
         cameraEnabled = !cameraEnabled;
         webStreamCall.enableCamera(cameraEnabled);
-        if (!cameraEnabled) {
-            localPlaceholder.setVisibility(View.VISIBLE);
-        }
+        localPlaceholder.setVisibility(cameraEnabled ? View.GONE : View.VISIBLE);
         updateControlLabels();
         updateCallControls(true);
     }
@@ -358,6 +377,15 @@ public class WebStreamActivity extends AppCompatActivity {
         setupPanel.setVisibility(inCall ? View.GONE : View.VISIBLE);
         callHeader.setVisibility(inCall ? View.VISIBLE : View.GONE);
         callControls.setVisibility(inCall ? View.VISIBLE : View.GONE);
+        keepOverlayComponentsAboveRemoteVideo();
+    }
+
+    private void keepOverlayComponentsAboveRemoteVideo() {
+        remotePlaceholder.bringToFront();
+        setupPanel.bringToFront();
+        callHeader.bringToFront();
+        localVideoContainer.bringToFront();
+        callControls.bringToFront();
     }
 
     private void updateControlLabels() {
