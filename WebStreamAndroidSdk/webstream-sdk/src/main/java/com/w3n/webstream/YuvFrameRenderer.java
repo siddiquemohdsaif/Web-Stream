@@ -1,9 +1,11 @@
 package com.w3n.webstream;
 
+import android.graphics.Bitmap;
 import android.media.MediaCodecInfo;
 import android.media.MediaFormat;
 import android.opengl.GLES20;
 import android.opengl.GLSurfaceView;
+import android.opengl.GLUtils;
 import android.util.Log;
 
 import com.w3n.webstream.Util.H264FrameBatchDecoder;
@@ -17,31 +19,48 @@ import javax.microedition.khronos.opengles.GL10;
 
 public final class YuvFrameRenderer implements GLSurfaceView.Renderer {
     private static final String TAG = "YuvFrameRenderer";
+    private static final int MODE_NONE = 0;
+    private static final int MODE_YUV = 1;
+    private static final int MODE_BITMAP = 2;
 
-    private int program;
+    private int yuvProgram;
+    private int bitmapProgram;
 
     private int yTextureId;
     private int uTextureId;
     private int vTextureId;
+    private int bitmapTextureId;
 
-    private int aPositionLocation;
-    private int aTexCoordLocation;
+    private int yuvPositionLocation;
+    private int yuvTexCoordLocation;
+    private int bitmapPositionLocation;
+    private int bitmapTexCoordLocation;
 
     private int uYTextureLocation;
     private int uUTextureLocation;
     private int uVTextureLocation;
+    private int uBitmapTextureLocation;
 
     private final FloatBuffer vertexBuffer;
     private final FloatBuffer texCoordBuffer;
-
     private final Object frameLock = new Object();
 
     private YuvPlanes pendingFrame;
     private YuvPlanes lastFrame;
+    private Bitmap pendingBitmap;
 
-    private boolean texturesCreated = false;
+    private boolean texturesCreated;
     private int textureFrameWidth;
     private int textureFrameHeight;
+    private int bitmapTextureWidth;
+    private int bitmapTextureHeight;
+    private int bitmapFrameWidth;
+    private int bitmapFrameHeight;
+    private int bitmapRotationDegrees;
+    private int yuvRotationDegrees;
+    private int frameMode = MODE_NONE;
+    private int surfaceWidth = 1;
+    private int surfaceHeight = 1;
     private boolean loggedFirstFrameStats;
     private boolean loggedFirstDraw;
 
@@ -50,7 +69,7 @@ public final class YuvFrameRenderer implements GLSurfaceView.Renderer {
      *
      * Some decoder byte-buffer outputs are effectively NV21-style VU instead of UV.
      */
-    private boolean uvSwapped = false;
+    private boolean uvSwapped;
 
     private static final float[] VERTICES = {
             -1f, -1f,
@@ -59,14 +78,6 @@ public final class YuvFrameRenderer implements GLSurfaceView.Renderer {
              1f,  1f
     };
 
-    /**
-     * If your image is upside down, swap this with:
-     *
-     * 0f, 0f,
-     * 1f, 0f,
-     * 0f, 1f,
-     * 1f, 1f
-     */
     private static final float[] TEX_COORDS = {
             0f, 1f,
             1f, 1f,
@@ -83,7 +94,7 @@ public final class YuvFrameRenderer implements GLSurfaceView.Renderer {
             "    vTexCoord = aTexCoord;\n" +
             "}";
 
-    private static final String FRAGMENT_SHADER =
+    private static final String YUV_FRAGMENT_SHADER =
             "precision mediump float;\n" +
             "uniform sampler2D uYTexture;\n" +
             "uniform sampler2D uUTexture;\n" +
@@ -100,6 +111,14 @@ public final class YuvFrameRenderer implements GLSurfaceView.Renderer {
             "    float b = y + 1.772 * u;\n" +
             "\n" +
             "    gl_FragColor = vec4(r, g, b, 1.0);\n" +
+            "}";
+
+    private static final String BITMAP_FRAGMENT_SHADER =
+            "precision mediump float;\n" +
+            "uniform sampler2D uTexture;\n" +
+            "varying vec2 vTexCoord;\n" +
+            "void main() {\n" +
+            "    gl_FragColor = texture2D(uTexture, vTexCoord);\n" +
             "}";
 
     public YuvFrameRenderer(int frameWidth, int frameHeight) {
@@ -145,24 +164,61 @@ public final class YuvFrameRenderer implements GLSurfaceView.Renderer {
         }
 
         synchronized (frameLock) {
+            if (pendingBitmap != null && !pendingBitmap.isRecycled()) {
+                pendingBitmap.recycle();
+                pendingBitmap = null;
+            }
             pendingFrame = planes;
+        }
+    }
+
+    public void updateBitmapFrame(Bitmap bitmap, int rotationDegrees) {
+        if (bitmap == null || bitmap.isRecycled()) {
+            return;
+        }
+
+        synchronized (frameLock) {
+            if (pendingBitmap != null && pendingBitmap != bitmap && !pendingBitmap.isRecycled()) {
+                pendingBitmap.recycle();
+            }
+            pendingBitmap = bitmap;
+            pendingFrame = null;
+            bitmapRotationDegrees = normalizeRotationDegrees(rotationDegrees);
+        }
+    }
+
+    public void setYuvRotationDegrees(int rotationDegrees) {
+        yuvRotationDegrees = normalizeRotationDegrees(rotationDegrees);
+    }
+
+    public void releasePendingBitmap() {
+        synchronized (frameLock) {
+            if (pendingBitmap != null && !pendingBitmap.isRecycled()) {
+                pendingBitmap.recycle();
+            }
+            pendingBitmap = null;
         }
     }
 
     @Override
     public void onSurfaceCreated(GL10 gl, EGLConfig config) {
-        program = createProgram(VERTEX_SHADER, FRAGMENT_SHADER);
+        yuvProgram = createProgram(VERTEX_SHADER, YUV_FRAGMENT_SHADER);
+        bitmapProgram = createProgram(VERTEX_SHADER, BITMAP_FRAGMENT_SHADER);
 
-        aPositionLocation = GLES20.glGetAttribLocation(program, "aPosition");
-        aTexCoordLocation = GLES20.glGetAttribLocation(program, "aTexCoord");
+        yuvPositionLocation = GLES20.glGetAttribLocation(yuvProgram, "aPosition");
+        yuvTexCoordLocation = GLES20.glGetAttribLocation(yuvProgram, "aTexCoord");
+        bitmapPositionLocation = GLES20.glGetAttribLocation(bitmapProgram, "aPosition");
+        bitmapTexCoordLocation = GLES20.glGetAttribLocation(bitmapProgram, "aTexCoord");
 
-        uYTextureLocation = GLES20.glGetUniformLocation(program, "uYTexture");
-        uUTextureLocation = GLES20.glGetUniformLocation(program, "uUTexture");
-        uVTextureLocation = GLES20.glGetUniformLocation(program, "uVTexture");
+        uYTextureLocation = GLES20.glGetUniformLocation(yuvProgram, "uYTexture");
+        uUTextureLocation = GLES20.glGetUniformLocation(yuvProgram, "uUTexture");
+        uVTextureLocation = GLES20.glGetUniformLocation(yuvProgram, "uVTexture");
+        uBitmapTextureLocation = GLES20.glGetUniformLocation(bitmapProgram, "uTexture");
 
         yTextureId = createTexture();
         uTextureId = createTexture();
         vTextureId = createTexture();
+        bitmapTextureId = createTexture();
 
         GLES20.glPixelStorei(GLES20.GL_UNPACK_ALIGNMENT, 1);
         GLES20.glClearColor(0f, 0f, 0f, 1f);
@@ -171,6 +227,8 @@ public final class YuvFrameRenderer implements GLSurfaceView.Renderer {
 
     @Override
     public void onSurfaceChanged(GL10 gl, int width, int height) {
+        surfaceWidth = Math.max(1, width);
+        surfaceHeight = Math.max(1, height);
         GLES20.glViewport(0, 0, width, height);
         Log.d("DECODER_PARVEZ", "GL surface changed. width=" + width + ", height=" + height);
     }
@@ -180,15 +238,24 @@ public final class YuvFrameRenderer implements GLSurfaceView.Renderer {
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
 
         YuvPlanes frameToRender = null;
+        Bitmap bitmapToRender = null;
+        int bitmapRotation = 0;
 
         synchronized (frameLock) {
-            if (pendingFrame != null) {
+            if (pendingBitmap != null) {
+                bitmapToRender = pendingBitmap;
+                bitmapRotation = bitmapRotationDegrees;
+                pendingBitmap = null;
+            } else if (pendingFrame != null) {
                 frameToRender = pendingFrame;
                 pendingFrame = null;
             }
         }
 
-        if (frameToRender != null) {
+        if (bitmapToRender != null) {
+            uploadBitmapFrame(bitmapToRender, bitmapRotation);
+            bitmapToRender.recycle();
+        } else if (frameToRender != null) {
             lastFrame = frameToRender;
             uploadYuvFrame(frameToRender);
             if (!loggedFirstDraw) {
@@ -198,9 +265,30 @@ public final class YuvFrameRenderer implements GLSurfaceView.Renderer {
             }
         }
 
-        if (lastFrame != null) {
-            drawTextures();
+        if (frameMode == MODE_BITMAP) {
+            drawBitmapTexture();
+        } else if (frameMode == MODE_YUV && lastFrame != null) {
+            drawYuvTextures();
         }
+    }
+
+    private void uploadBitmapFrame(Bitmap bitmap, int rotationDegrees) {
+        bitmapFrameWidth = bitmap.getWidth();
+        bitmapFrameHeight = bitmap.getHeight();
+        bitmapRotationDegrees = rotationDegrees;
+
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, bitmapTextureId);
+        if (bitmapTextureWidth != bitmapFrameWidth || bitmapTextureHeight != bitmapFrameHeight) {
+            bitmapTextureWidth = bitmapFrameWidth;
+            bitmapTextureHeight = bitmapFrameHeight;
+            GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bitmap, 0);
+        } else {
+            GLUtils.texSubImage2D(GLES20.GL_TEXTURE_2D, 0, 0, 0, bitmap);
+        }
+
+        frameMode = MODE_BITMAP;
+        checkGlError("uploadBitmapFrame");
     }
 
     private void uploadYuvFrame(YuvPlanes planes) {
@@ -235,6 +323,7 @@ public final class YuvFrameRenderer implements GLSurfaceView.Renderer {
         );
 
         texturesCreated = true;
+        frameMode = MODE_YUV;
 
         checkGlError("uploadYuvFrame");
     }
@@ -278,8 +367,9 @@ public final class YuvFrameRenderer implements GLSurfaceView.Renderer {
         }
     }
 
-    private void drawTextures() {
-        GLES20.glUseProgram(program);
+    private void drawYuvTextures() {
+        updateCenterCropTexCoords(textureFrameWidth, textureFrameHeight, yuvRotationDegrees);
+        GLES20.glUseProgram(yuvProgram);
 
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, yTextureId);
@@ -293,10 +383,27 @@ public final class YuvFrameRenderer implements GLSurfaceView.Renderer {
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, vTextureId);
         GLES20.glUniform1i(uVTextureLocation, 2);
 
+        drawQuad(yuvPositionLocation, yuvTexCoordLocation);
+        checkGlError("drawYuvTextures");
+    }
+
+    private void drawBitmapTexture() {
+        updateCenterCropTexCoords(bitmapFrameWidth, bitmapFrameHeight, bitmapRotationDegrees);
+        GLES20.glUseProgram(bitmapProgram);
+
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, bitmapTextureId);
+        GLES20.glUniform1i(uBitmapTextureLocation, 0);
+
+        drawQuad(bitmapPositionLocation, bitmapTexCoordLocation);
+        checkGlError("drawBitmapTexture");
+    }
+
+    private void drawQuad(int positionLocation, int texCoordLocation) {
         vertexBuffer.position(0);
-        GLES20.glEnableVertexAttribArray(aPositionLocation);
+        GLES20.glEnableVertexAttribArray(positionLocation);
         GLES20.glVertexAttribPointer(
-                aPositionLocation,
+                positionLocation,
                 2,
                 GLES20.GL_FLOAT,
                 false,
@@ -305,9 +412,9 @@ public final class YuvFrameRenderer implements GLSurfaceView.Renderer {
         );
 
         texCoordBuffer.position(0);
-        GLES20.glEnableVertexAttribArray(aTexCoordLocation);
+        GLES20.glEnableVertexAttribArray(texCoordLocation);
         GLES20.glVertexAttribPointer(
-                aTexCoordLocation,
+                texCoordLocation,
                 2,
                 GLES20.GL_FLOAT,
                 false,
@@ -317,10 +424,79 @@ public final class YuvFrameRenderer implements GLSurfaceView.Renderer {
 
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
 
-        GLES20.glDisableVertexAttribArray(aPositionLocation);
-        GLES20.glDisableVertexAttribArray(aTexCoordLocation);
+        GLES20.glDisableVertexAttribArray(positionLocation);
+        GLES20.glDisableVertexAttribArray(texCoordLocation);
+    }
 
-        checkGlError("drawTextures");
+    private void updateCenterCropTexCoords(
+            int frameWidth,
+            int frameHeight,
+            int rotationDegrees
+    ) {
+        float left = 0f;
+        float right = 1f;
+        float top = 0f;
+        float bottom = 1f;
+        if (frameWidth > 0 && frameHeight > 0 && surfaceWidth > 0 && surfaceHeight > 0) {
+            boolean swapsDimensions = rotationDegrees == 90 || rotationDegrees == 270;
+            int rotatedFrameWidth = swapsDimensions ? frameHeight : frameWidth;
+            int rotatedFrameHeight = swapsDimensions ? frameWidth : frameHeight;
+            float frameAspect = rotatedFrameWidth / (float) rotatedFrameHeight;
+            float viewAspect = surfaceWidth / (float) surfaceHeight;
+            if (frameAspect > viewAspect) {
+                float visibleWidth = viewAspect / frameAspect;
+                left = (1f - visibleWidth) / 2f;
+                right = 1f - left;
+            } else if (frameAspect < viewAspect) {
+                float visibleHeight = frameAspect / viewAspect;
+                top = (1f - visibleHeight) / 2f;
+                bottom = 1f - top;
+            }
+        }
+
+        texCoordBuffer.position(0);
+        texCoordBuffer.put(createRotatedTexCoords(left, right, top, bottom, rotationDegrees))
+                .position(0);
+    }
+
+    private float[] createRotatedTexCoords(
+            float left,
+            float right,
+            float top,
+            float bottom,
+            int rotationDegrees
+    ) {
+        switch (rotationDegrees) {
+            case 90:
+                return new float[]{
+                        right, bottom,
+                        right, top,
+                        left, bottom,
+                        left, top
+                };
+            case 180:
+                return new float[]{
+                        right, top,
+                        left, top,
+                        right, bottom,
+                        left, bottom
+                };
+            case 270:
+                return new float[]{
+                        left, top,
+                        left, bottom,
+                        right, top,
+                        right, bottom
+                };
+            case 0:
+            default:
+                return new float[]{
+                        left, bottom,
+                        right, bottom,
+                        left, top,
+                        right, top
+                };
+        }
     }
 
     private int createTexture() {
@@ -642,6 +818,15 @@ public final class YuvFrameRenderer implements GLSurfaceView.Renderer {
         while ((error = GLES20.glGetError()) != GLES20.GL_NO_ERROR) {
             throw new RuntimeException(label + ": glError " + error);
         }
+    }
+
+    private static int normalizeRotationDegrees(int rotationDegrees) {
+        int normalized = ((rotationDegrees % 360) + 360) % 360;
+        if (normalized % 90 != 0) {
+            throw new IllegalArgumentException(
+                    "Rotation must be 0, 90, 180, or 270 degrees.");
+        }
+        return normalized;
     }
 
     private static final class YuvPlanes {
