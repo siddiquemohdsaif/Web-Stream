@@ -33,10 +33,15 @@ final class LocalVideoPreviewView extends TextureView implements TextureView.Sur
     private int bitmapFrameCount;
     private int yuvFrameCount;
 
-    LocalVideoPreviewView(Context context) {
+    LocalVideoPreviewView(Context context, int previewRotationDegrees) {
         super(context);
+        renderer.setPreviewRotationDegrees(previewRotationDegrees);
         setOpaque(true);
         setSurfaceTextureListener(this);
+    }
+
+    void setPreviewRotationDegrees(int rotationDegrees) {
+        postRender(() -> renderer.setPreviewRotationDegrees(rotationDegrees));
     }
 
     void renderBitmap(Bitmap bitmap) {
@@ -216,6 +221,16 @@ final class LocalVideoPreviewView extends TextureView implements TextureView.Sur
         private ByteBuffer vPlaneBuffer;
         private int frameMode;
         private int drawCount;
+        private int previewRotationDegrees;
+
+        void setPreviewRotationDegrees(int rotationDegrees) {
+            int normalized = normalizeRotationDegrees(rotationDegrees);
+            if (previewRotationDegrees == normalized) {
+                return;
+            }
+            previewRotationDegrees = normalized;
+            drawLastFrame();
+        }
 
         void create(Surface surface, int width, int height) {
             release();
@@ -566,7 +581,11 @@ final class LocalVideoPreviewView extends TextureView implements TextureView.Sur
             float top = 0f;
             float bottom = 1f;
             if (frameWidth > 0 && frameHeight > 0 && viewWidth > 0 && viewHeight > 0) {
-                float frameAspect = frameWidth / (float) frameHeight;
+                boolean swapsDimensions = previewRotationDegrees == 90
+                        || previewRotationDegrees == 270;
+                int rotatedFrameWidth = swapsDimensions ? frameHeight : frameWidth;
+                int rotatedFrameHeight = swapsDimensions ? frameWidth : frameHeight;
+                float frameAspect = rotatedFrameWidth / (float) rotatedFrameHeight;
                 float viewAspect = viewWidth / (float) viewHeight;
                 if (frameAspect > viewAspect) {
                     float visibleWidth = viewAspect / frameAspect;
@@ -579,14 +598,47 @@ final class LocalVideoPreviewView extends TextureView implements TextureView.Sur
                 }
             }
 
-            float[] coords = {
-                    left, bottom,
-                    right, bottom,
-                    left, top,
-                    right, top
-            };
+            float[] coords = createRotatedTexCoords(left, right, top, bottom);
             texCoordBuffer.position(0);
             texCoordBuffer.put(coords).position(0);
+        }
+
+        private float[] createRotatedTexCoords(
+                float left,
+                float right,
+                float top,
+                float bottom) {
+            switch (previewRotationDegrees) {
+                case 90:
+                    return new float[]{
+                            right, bottom,
+                            right, top,
+                            left, bottom,
+                            left, top
+                    };
+                case 180:
+                    return new float[]{
+                            right, top,
+                            left, top,
+                            right, bottom,
+                            left, bottom
+                    };
+                case 270:
+                    return new float[]{
+                            left, top,
+                            left, bottom,
+                            right, top,
+                            right, bottom
+                    };
+                case 0:
+                default:
+                    return new float[]{
+                            left, bottom,
+                            right, bottom,
+                            left, top,
+                            right, top
+                    };
+            }
         }
 
         private int createTexture() {
@@ -703,5 +755,14 @@ final class LocalVideoPreviewView extends TextureView implements TextureView.Sur
                 + "/r" + ((color >>> 16) & 0xFF)
                 + "/g" + ((color >>> 8) & 0xFF)
                 + "/b" + (color & 0xFF);
+    }
+
+    private static int normalizeRotationDegrees(int rotationDegrees) {
+        int normalized = ((rotationDegrees % 360) + 360) % 360;
+        if (normalized % 90 != 0) {
+            throw new IllegalArgumentException(
+                    "Local preview rotation must be 0, 90, 180, or 270 degrees.");
+        }
+        return normalized;
     }
 }

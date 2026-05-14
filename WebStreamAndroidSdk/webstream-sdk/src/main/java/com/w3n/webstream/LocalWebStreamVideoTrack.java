@@ -78,7 +78,9 @@ final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
         Log.d(SdkConstants.TAG, "Attaching local video track. participantId=" + participantId);
         detach(attachedView);
         attachedView = view;
-        localPreviewView = new LocalVideoPreviewView(view.getContext());
+        localPreviewView = new LocalVideoPreviewView(
+                view.getContext(),
+                view.getLocalPreviewRotationDegrees());
         view.addView(localPreviewView, new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT));
@@ -130,6 +132,12 @@ final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
         stopCamera();
         if (enabled && attachedView != null) {
             startCamera();
+        }
+    }
+
+    void setPreviewRotationDegrees(int rotationDegrees) {
+        if (localPreviewView != null) {
+            localPreviewView.setPreviewRotationDegrees(rotationDegrees);
         }
     }
 
