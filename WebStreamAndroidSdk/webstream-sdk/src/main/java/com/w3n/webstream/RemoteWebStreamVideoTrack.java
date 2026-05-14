@@ -2,8 +2,6 @@ package com.w3n.webstream;
 
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
-import android.graphics.PixelFormat;
-import android.opengl.GLSurfaceView;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Looper;
@@ -23,8 +21,7 @@ final class RemoteWebStreamVideoTrack implements WebStreamVideoTrack {
     private final Handler decodeHandler;
 
     private WebStreamVideoView attachedView;
-    private GLSurfaceView remoteGlSurfaceView;
-    private YuvFrameRenderer remoteRenderer;
+    private RemoteVideoTextureView remoteTextureView;
     private H264FrameBatchDecoder h264Decoder;
     private int h264DecoderWidth;
     private int h264DecoderHeight;
@@ -56,20 +53,11 @@ final class RemoteWebStreamVideoTrack implements WebStreamVideoTrack {
         detach(attachedView);
         attachedView = view;
 
-        remoteRenderer = new YuvFrameRenderer(1, 1);
-        remoteRenderer.setYuvRotationDegrees(REMOTE_FRAME_ROTATION_DEGREES);
-        remoteGlSurfaceView = new GLSurfaceView(view.getContext());
-        remoteGlSurfaceView.setEGLContextClientVersion(2);
-        remoteGlSurfaceView.setZOrderOnTop(true);
-        remoteGlSurfaceView.getHolder().setFormat(PixelFormat.OPAQUE);
-        remoteGlSurfaceView.setRenderer(remoteRenderer);
-        remoteGlSurfaceView.setRenderMode(GLSurfaceView.RENDERMODE_WHEN_DIRTY);
-        remoteGlSurfaceView.setBackgroundColor(0xFF050606);
-        view.addView(remoteGlSurfaceView, new ViewGroup.LayoutParams(
+        remoteTextureView = new RemoteVideoTextureView(view.getContext(), REMOTE_FRAME_ROTATION_DEGREES);
+        view.addView(remoteTextureView, new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT));
-        remoteGlSurfaceView.onResume();
-        remoteGlSurfaceView.setVisibility(enabled ? View.VISIBLE : View.INVISIBLE);
+        remoteTextureView.setVisibility(enabled ? View.VISIBLE : View.INVISIBLE);
     }
 
     @Override
@@ -78,14 +66,10 @@ final class RemoteWebStreamVideoTrack implements WebStreamVideoTrack {
             return;
         }
         Log.d(SdkConstants.TAG, "Detaching remote video track. participantId=" + participantId);
-        if (remoteRenderer != null) {
-            remoteRenderer.releasePendingBitmap();
-        }
-        if (remoteGlSurfaceView != null) {
-            remoteGlSurfaceView.onPause();
-            view.removeView(remoteGlSurfaceView);
-            remoteGlSurfaceView = null;
-            remoteRenderer = null;
+        if (remoteTextureView != null) {
+            remoteTextureView.releaseRenderer();
+            view.removeView(remoteTextureView);
+            remoteTextureView = null;
         }
         releaseH264Decoder();
         attachedView = null;
@@ -124,10 +108,13 @@ final class RemoteWebStreamVideoTrack implements WebStreamVideoTrack {
 
     void setEnabled(boolean enabled) {
         this.enabled = enabled;
-        if (remoteGlSurfaceView != null) {
-            remoteGlSurfaceView.setVisibility(enabled
+        if (remoteTextureView != null) {
+            remoteTextureView.setVisibility(enabled
                     ? View.VISIBLE
                     : View.INVISIBLE);
+            if (!enabled) {
+                remoteTextureView.clearFrame();
+            }
         }
     }
 
@@ -197,21 +184,19 @@ final class RemoteWebStreamVideoTrack implements WebStreamVideoTrack {
             new H264FrameBatchDecoder.Callback() {
                 @Override
                 public void onImageAvailable(H264FrameBatchDecoder.DecodedFrame frame) {
-                    Log.d("DECODER_PARVEZ", "onImageAvailable: "+frame.toString());
-                    YuvFrameRenderer renderer = remoteRenderer;
-                    GLSurfaceView surfaceView = remoteGlSurfaceView;
-                    if (released || renderer == null || surfaceView == null) {
+                    Log.d("DECODER_PARVEZ", "onImageAvailable: " + frame);
+                    RemoteVideoTextureView textureView = remoteTextureView;
+                    if (released || textureView == null) {
                         if (frame != null) {
                             frame.release();
                         }
                         return;
                     }
-                    renderer.updateFrame(frame);
                     if (enabled) {
-                        surfaceView.setVisibility(View.VISIBLE);
-                        surfaceView.bringToFront();
-                        surfaceView.requestRender();
-                        surfaceView.post(surfaceView::requestRender);
+                        textureView.setVisibility(View.VISIBLE);
+                        textureView.renderDecodedFrame(frame);
+                    } else if (frame != null) {
+                        frame.release();
                     }
                 }
 
@@ -244,19 +229,17 @@ final class RemoteWebStreamVideoTrack implements WebStreamVideoTrack {
             bitmap.recycle();
             return;
         }
-        YuvFrameRenderer renderer = remoteRenderer;
-        GLSurfaceView surfaceView = remoteGlSurfaceView;
-        if (renderer == null || surfaceView == null) {
+        RemoteVideoTextureView textureView = remoteTextureView;
+        if (textureView == null) {
             bitmap.recycle();
             return;
         }
 
-        renderer.updateBitmapFrame(bitmap, REMOTE_FRAME_ROTATION_DEGREES);
         if (enabled) {
-            surfaceView.setVisibility(View.VISIBLE);
-            surfaceView.bringToFront();
-            surfaceView.requestRender();
-            surfaceView.post(surfaceView::requestRender);
+            textureView.setVisibility(View.VISIBLE);
+            textureView.renderBitmap(bitmap, REMOTE_FRAME_ROTATION_DEGREES);
+        } else {
+            bitmap.recycle();
         }
     }
 }
