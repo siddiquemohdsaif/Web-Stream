@@ -89,10 +89,10 @@ public class JoinCallActivity extends AppCompatActivity {
         statusText.setText("Starting call...");
 
         WebStreamCallOptions options = new WebStreamCallOptions.Builder()
-                .videoResolution(1280, 720)
+                .videoResolution(864, 480)
                 .frameRateFps(15)
                 .bitrateKbps(1200)
-                .imageFormat(WebStreamCallOptions.ImageFormat.H264)
+                .imageFormat(WebStreamCallOptions.ImageFormat.JPEG)
                 .build();
 
         webStreamClient = new WebStreamClient.Builder(this)

@@ -230,11 +230,10 @@ final class LocalWebStreamVideoTrack implements WebStreamVideoTrack {
         long timestampMs = frame.timestampNs > 0
                 ? frame.timestampNs / 1_000_000L
                 : System.currentTimeMillis();
-        Bitmap orientedBitmap = rotateBitmap(frame.bitmap, -90f);
         frameEncodeInProgress = true;
         Log.d("DECODER_QQ", "handleCameraFrame: jpeg frame available");
         frameHandler.post(() -> encodeAndDispatchFrame(
-                orientedBitmap,
+                frame.bitmap,
                 options.getVideoWidth(),
                 options.getVideoHeight(),
                 timestampMs,

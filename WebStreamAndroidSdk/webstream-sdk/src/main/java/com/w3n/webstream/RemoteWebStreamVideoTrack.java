@@ -2,6 +2,7 @@ package com.w3n.webstream;
 
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.PixelFormat;
 import android.opengl.GLSurfaceView;
 import android.os.Handler;
 import android.os.HandlerThread;
@@ -67,12 +68,15 @@ final class RemoteWebStreamVideoTrack implements WebStreamVideoTrack {
         h264Renderer = new YuvFrameRenderer(1, 1);
         h264GlSurfaceView = new GLSurfaceView(view.getContext());
         h264GlSurfaceView.setEGLContextClientVersion(2);
+        h264GlSurfaceView.setZOrderOnTop(true);
+        h264GlSurfaceView.getHolder().setFormat(PixelFormat.OPAQUE);
         h264GlSurfaceView.setRenderer(h264Renderer);
         h264GlSurfaceView.setRenderMode(GLSurfaceView.RENDERMODE_WHEN_DIRTY);
         h264GlSurfaceView.setBackgroundColor(0xFF050606);
         view.addView(h264GlSurfaceView, new ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT));
+        h264GlSurfaceView.onResume();
 
         if (latestBitmap != null) {
             imageView.setImageBitmap(latestBitmap);
@@ -162,7 +166,12 @@ final class RemoteWebStreamVideoTrack implements WebStreamVideoTrack {
 
     private void updateH264Frame(RemoteVideoFrame frame) {
         if (!ImageFormatSupport.canDecode(WebStreamCallOptions.ImageFormat.H264)) {
-            Log.d(SdkConstants.TAG, "Skipping remote H.264 packet; decoder is not available.");
+            Log.d("DECODER_PARVEZ", "Skipping remote H.264 packet; decoder is not available.");
+            return;
+        }
+        if (frame.getWidth() <= 0 || frame.getHeight() <= 0) {
+            Log.d("DECODER_PARVEZ", "Skipping remote H.264 packet with missing dimensions. participantId="
+                    + participantId + ", width=" + frame.getWidth() + ", height=" + frame.getHeight());
             return;
         }
 
@@ -213,6 +222,7 @@ final class RemoteWebStreamVideoTrack implements WebStreamVideoTrack {
             new H264FrameBatchDecoder.Callback() {
                 @Override
                 public void onImageAvailable(H264FrameBatchDecoder.DecodedFrame frame) {
+                    Log.d("DECODER_PARVEZ", "onImageAvailable: "+frame.toString());
                     YuvFrameRenderer renderer = h264Renderer;
                     GLSurfaceView surfaceView = h264GlSurfaceView;
                     if (released || renderer == null || surfaceView == null) {
@@ -222,12 +232,14 @@ final class RemoteWebStreamVideoTrack implements WebStreamVideoTrack {
                         return;
                     }
                     renderer.updateFrame(frame);
-                    surfaceView.requestRender();
                     if (imageView != null) {
                         imageView.setVisibility(ImageView.INVISIBLE);
                     }
                     if (enabled) {
                         surfaceView.setVisibility(ImageView.VISIBLE);
+                        surfaceView.bringToFront();
+                        surfaceView.requestRender();
+                        surfaceView.post(surfaceView::requestRender);
                     }
                 }
 

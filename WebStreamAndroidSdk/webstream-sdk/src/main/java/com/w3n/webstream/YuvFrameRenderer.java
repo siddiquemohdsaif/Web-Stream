@@ -4,6 +4,7 @@ import android.media.MediaCodecInfo;
 import android.media.MediaFormat;
 import android.opengl.GLES20;
 import android.opengl.GLSurfaceView;
+import android.util.Log;
 
 import com.w3n.webstream.Util.H264FrameBatchDecoder;
 
@@ -15,6 +16,7 @@ import javax.microedition.khronos.egl.EGLConfig;
 import javax.microedition.khronos.opengles.GL10;
 
 public final class YuvFrameRenderer implements GLSurfaceView.Renderer {
+    private static final String TAG = "YuvFrameRenderer";
 
     private int program;
 
@@ -40,6 +42,8 @@ public final class YuvFrameRenderer implements GLSurfaceView.Renderer {
     private boolean texturesCreated = false;
     private int textureFrameWidth;
     private int textureFrameHeight;
+    private boolean loggedFirstFrameStats;
+    private boolean loggedFirstDraw;
 
     /**
      * Set this true if colors look wrong / purple-green.
@@ -162,11 +166,13 @@ public final class YuvFrameRenderer implements GLSurfaceView.Renderer {
 
         GLES20.glPixelStorei(GLES20.GL_UNPACK_ALIGNMENT, 1);
         GLES20.glClearColor(0f, 0f, 0f, 1f);
+        Log.d("DECODER_PARVEZ", "GL surface created.");
     }
 
     @Override
     public void onSurfaceChanged(GL10 gl, int width, int height) {
         GLES20.glViewport(0, 0, width, height);
+        Log.d("DECODER_PARVEZ", "GL surface changed. width=" + width + ", height=" + height);
     }
 
     @Override
@@ -185,6 +191,11 @@ public final class YuvFrameRenderer implements GLSurfaceView.Renderer {
         if (frameToRender != null) {
             lastFrame = frameToRender;
             uploadYuvFrame(frameToRender);
+            if (!loggedFirstDraw) {
+                loggedFirstDraw = true;
+                Log.d("DECODER_PARVEZ", "First decoded frame uploaded to GL. width="
+                        + frameToRender.width + ", height=" + frameToRender.height);
+            }
         }
 
         if (lastFrame != null) {
@@ -348,7 +359,7 @@ public final class YuvFrameRenderer implements GLSurfaceView.Renderer {
         return id;
     }
 
-    private static YuvPlanes extractYuvPlanes(
+    private YuvPlanes extractYuvPlanes(
             ByteBuffer codecBuffer,
             MediaFormat mediaFormat,
             int width,
@@ -369,6 +380,11 @@ public final class YuvFrameRenderer implements GLSurfaceView.Renderer {
 
         byte[] raw = new byte[buffer.remaining()];
         buffer.get(raw);
+
+        if (!loggedFirstFrameStats) {
+            loggedFirstFrameStats = true;
+            logFirstFrameStats(raw, width, height, stride);
+        }
 
         ByteBuffer yPlane = ByteBuffer.allocateDirect(width * height);
         ByteBuffer uPlane = ByteBuffer.allocateDirect((width / 2) * (height / 2));
@@ -411,6 +427,48 @@ public final class YuvFrameRenderer implements GLSurfaceView.Renderer {
         vPlane.position(0);
 
         return new YuvPlanes(width, height, yPlane, uPlane, vPlane);
+    }
+
+    private static void logFirstFrameStats(
+            byte[] raw,
+            int width,
+            int height,
+            int stride
+    ) {
+        int sampleRows = Math.min(height, 24);
+        int sampleCols = Math.min(width, 64);
+        int min = 255;
+        int max = 0;
+        long sum = 0L;
+        int count = 0;
+
+        for (int row = 0; row < sampleRows; row++) {
+            int rowStart = row * stride;
+            if (rowStart >= raw.length) {
+                break;
+            }
+
+            for (int col = 0; col < sampleCols && rowStart + col < raw.length; col++) {
+                int value = raw[rowStart + col] & 0xff;
+                min = Math.min(min, value);
+                max = Math.max(max, value);
+                sum += value;
+                count++;
+            }
+        }
+
+        if (count == 0) {
+            Log.d("DECODER_PARVEZ", "Decoded Y sample unavailable. rawBytes=" + raw.length);
+            return;
+        }
+
+        Log.d("DECODER_PARVEZ", "Decoded Y sample. min=" + min
+                + ", max=" + max
+                + ", avg=" + (sum / count)
+                + ", rawBytes=" + raw.length
+                + ", width=" + width
+                + ", height=" + height
+                + ", stride=" + stride);
     }
 
     private static void copyYPlane(

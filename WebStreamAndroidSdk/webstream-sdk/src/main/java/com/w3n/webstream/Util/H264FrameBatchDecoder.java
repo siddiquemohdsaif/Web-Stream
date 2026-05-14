@@ -267,6 +267,24 @@ public final class H264FrameBatchDecoder {
                 super.finalize();
             }
         }
+
+        @Override
+        public String toString() {
+            return "DecodedFrame{" +
+                    "width=" + width +
+                    ", height=" + height +
+                    ", timestampNs=" + timestampNs +
+                    ", sequence=" + sequence +
+                    ", buffer=" + buffer +
+                    ", size=" + size +
+                    ", offset=" + offset +
+                    ", mediaFormat=" + mediaFormat +
+                    ", frameFormat=" + frameFormat +
+                    ", nativeBufferPtr=" + nativeBufferPtr +
+                    ", nativeBufferSize=" + nativeBufferSize +
+                    ", nativeBufferReleased=" + nativeBufferReleased +
+                    '}';
+        }
     }
 
     private static final String TAG = "H264FrameBatchDecoder";

@@ -180,6 +180,10 @@ public final class WebStreamCallOptions {
         }
 
         public Builder videoResolution(int width, int height) {
+
+            // 1280 * 720 HD Video Resolution
+            // 864 * 480 SD Video Resolution
+            // 680 * 480 SD Video Resolution
             this.videoWidth = width;
             this.videoHeight = height;
             return this;
