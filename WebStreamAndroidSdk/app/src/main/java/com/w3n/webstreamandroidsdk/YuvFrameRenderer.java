@@ -41,6 +41,8 @@ public final class YuvFrameRenderer implements GLSurfaceView.Renderer {
     private YuvPlanes lastFrame;
 
     private boolean texturesCreated = false;
+    private int surfaceWidth = 1;
+    private int surfaceHeight = 1;
 
     /**
      * Set this true if colors look wrong / purple-green.
@@ -170,6 +172,8 @@ public final class YuvFrameRenderer implements GLSurfaceView.Renderer {
 
     @Override
     public void onSurfaceChanged(GL10 gl, int width, int height) {
+        surfaceWidth = Math.max(1, width);
+        surfaceHeight = Math.max(1, height);
         GLES20.glViewport(0, 0, width, height);
     }
 
@@ -266,6 +270,7 @@ public final class YuvFrameRenderer implements GLSurfaceView.Renderer {
     }
 
     private void drawTextures() {
+        updateCenterCropVertices();
         GLES20.glUseProgram(program);
 
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
@@ -308,6 +313,29 @@ public final class YuvFrameRenderer implements GLSurfaceView.Renderer {
         GLES20.glDisableVertexAttribArray(aTexCoordLocation);
 
         checkGlError("drawTextures");
+    }
+
+    private void updateCenterCropVertices() {
+        float xScale = 1f;
+        float yScale = 1f;
+        if (frameWidth > 0 && frameHeight > 0 && surfaceWidth > 0 && surfaceHeight > 0) {
+            float frameAspect = frameWidth / (float) frameHeight;
+            float viewAspect = surfaceWidth / (float) surfaceHeight;
+            if (frameAspect > viewAspect) {
+                xScale = frameAspect / viewAspect;
+            } else if (frameAspect < viewAspect) {
+                yScale = viewAspect / frameAspect;
+            }
+        }
+
+        float[] vertices = {
+                -xScale, -yScale,
+                 xScale, -yScale,
+                -xScale,  yScale,
+                 xScale,  yScale
+        };
+        vertexBuffer.position(0);
+        vertexBuffer.put(vertices).position(0);
     }
 
     private int createTexture() {

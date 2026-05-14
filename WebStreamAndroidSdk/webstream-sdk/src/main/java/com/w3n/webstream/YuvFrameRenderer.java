@@ -368,7 +368,8 @@ public final class YuvFrameRenderer implements GLSurfaceView.Renderer {
     }
 
     private void drawYuvTextures() {
-        updateCenterCropTexCoords(textureFrameWidth, textureFrameHeight, yuvRotationDegrees);
+        updateCenterCropVertices(textureFrameWidth, textureFrameHeight, yuvRotationDegrees);
+        updateTexCoords(yuvRotationDegrees);
         GLES20.glUseProgram(yuvProgram);
 
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
@@ -388,7 +389,8 @@ public final class YuvFrameRenderer implements GLSurfaceView.Renderer {
     }
 
     private void drawBitmapTexture() {
-        updateCenterCropTexCoords(bitmapFrameWidth, bitmapFrameHeight, bitmapRotationDegrees);
+        updateCenterCropVertices(bitmapFrameWidth, bitmapFrameHeight, bitmapRotationDegrees);
+        updateTexCoords(bitmapRotationDegrees);
         GLES20.glUseProgram(bitmapProgram);
 
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
@@ -428,15 +430,13 @@ public final class YuvFrameRenderer implements GLSurfaceView.Renderer {
         GLES20.glDisableVertexAttribArray(texCoordLocation);
     }
 
-    private void updateCenterCropTexCoords(
+    private void updateCenterCropVertices(
             int frameWidth,
             int frameHeight,
             int rotationDegrees
     ) {
-        float left = 0f;
-        float right = 1f;
-        float top = 0f;
-        float bottom = 1f;
+        float xScale = 1f;
+        float yScale = 1f;
         if (frameWidth > 0 && frameHeight > 0 && surfaceWidth > 0 && surfaceHeight > 0) {
             boolean swapsDimensions = rotationDegrees == 90 || rotationDegrees == 270;
             int rotatedFrameWidth = swapsDimensions ? frameHeight : frameWidth;
@@ -444,18 +444,25 @@ public final class YuvFrameRenderer implements GLSurfaceView.Renderer {
             float frameAspect = rotatedFrameWidth / (float) rotatedFrameHeight;
             float viewAspect = surfaceWidth / (float) surfaceHeight;
             if (frameAspect > viewAspect) {
-                float visibleWidth = viewAspect / frameAspect;
-                left = (1f - visibleWidth) / 2f;
-                right = 1f - left;
+                xScale = frameAspect / viewAspect;
             } else if (frameAspect < viewAspect) {
-                float visibleHeight = frameAspect / viewAspect;
-                top = (1f - visibleHeight) / 2f;
-                bottom = 1f - top;
+                yScale = viewAspect / frameAspect;
             }
         }
 
+        float[] vertices = {
+                -xScale, -yScale,
+                 xScale, -yScale,
+                -xScale,  yScale,
+                 xScale,  yScale
+        };
+        vertexBuffer.position(0);
+        vertexBuffer.put(vertices).position(0);
+    }
+
+    private void updateTexCoords(int rotationDegrees) {
         texCoordBuffer.position(0);
-        texCoordBuffer.put(createRotatedTexCoords(left, right, top, bottom, rotationDegrees))
+        texCoordBuffer.put(createRotatedTexCoords(0f, 1f, 0f, 1f, rotationDegrees))
                 .position(0);
     }
 

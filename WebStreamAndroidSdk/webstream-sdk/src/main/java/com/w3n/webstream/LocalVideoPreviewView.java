@@ -546,7 +546,8 @@ final class LocalVideoPreviewView extends TextureView implements TextureView.Sur
         }
 
         private void drawQuad(int program, int frameWidth, int frameHeight) {
-            updateCenterCropTexCoords(frameWidth, frameHeight);
+            updateCenterCropVertices(frameWidth, frameHeight);
+            updateTexCoords();
             int positionLocation = GLES20.glGetAttribLocation(program, "aPosition");
             int texCoordLocation = GLES20.glGetAttribLocation(program, "aTexCoord");
 
@@ -575,11 +576,9 @@ final class LocalVideoPreviewView extends TextureView implements TextureView.Sur
             GLES20.glDisableVertexAttribArray(texCoordLocation);
         }
 
-        private void updateCenterCropTexCoords(int frameWidth, int frameHeight) {
-            float left = 0f;
-            float right = 1f;
-            float top = 0f;
-            float bottom = 1f;
+        private void updateCenterCropVertices(int frameWidth, int frameHeight) {
+            float xScale = 1f;
+            float yScale = 1f;
             if (frameWidth > 0 && frameHeight > 0 && viewWidth > 0 && viewHeight > 0) {
                 boolean swapsDimensions = previewRotationDegrees == 90
                         || previewRotationDegrees == 270;
@@ -588,17 +587,24 @@ final class LocalVideoPreviewView extends TextureView implements TextureView.Sur
                 float frameAspect = rotatedFrameWidth / (float) rotatedFrameHeight;
                 float viewAspect = viewWidth / (float) viewHeight;
                 if (frameAspect > viewAspect) {
-                    float visibleWidth = viewAspect / frameAspect;
-                    left = (1f - visibleWidth) / 2f;
-                    right = 1f - left;
+                    xScale = frameAspect / viewAspect;
                 } else if (frameAspect < viewAspect) {
-                    float visibleHeight = frameAspect / viewAspect;
-                    top = (1f - visibleHeight) / 2f;
-                    bottom = 1f - top;
+                    yScale = viewAspect / frameAspect;
                 }
             }
 
-            float[] coords = createRotatedTexCoords(left, right, top, bottom);
+            float[] vertices = {
+                    -xScale, -yScale,
+                     xScale, -yScale,
+                    -xScale,  yScale,
+                     xScale,  yScale
+            };
+            vertexBuffer.position(0);
+            vertexBuffer.put(vertices).position(0);
+        }
+
+        private void updateTexCoords() {
+            float[] coords = createRotatedTexCoords(0f, 1f, 0f, 1f);
             texCoordBuffer.position(0);
             texCoordBuffer.put(coords).position(0);
         }
