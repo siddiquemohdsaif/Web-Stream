@@ -8,6 +8,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.provider.MediaStore;
+import android.util.Log;
 import android.widget.Button;
 import android.widget.TextView;
 
@@ -16,6 +17,8 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
+
+import com.w3n.webstream.ProcessorInfo;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -98,6 +101,20 @@ public class MainActivity extends AppCompatActivity {
         Button jpegBitmapJxlButton = findViewById(R.id.jpegBitmapJxlButton);
         jpegBitmapJxlButton.setOnClickListener(v ->
                 startActivity(new Intent(MainActivity.this, JpegBitmapJxlActivity.class)));
+
+        long buildStartNs = System.nanoTime();
+        String buildProcessorName = ProcessorInfo.getProcessorNameFromBuild();
+        logProcessorNameTimeTaken("Build", buildProcessorName, System.nanoTime() - buildStartNs);
+
+        long cpuInfoStartNs = System.nanoTime();
+        String cpuInfoProcessorName = ProcessorInfo.getProcessorNameFromCpuInfo();
+        logProcessorNameTimeTaken("/proc/cpuinfo", cpuInfoProcessorName, System.nanoTime() - cpuInfoStartNs);
+        ProcessorInfo.logCpuInfoContent();
+    }
+
+    private void logProcessorNameTimeTaken(String source, String processorName, long timeTakenNs) {
+        Log.d(ProcessorInfo.TAG_PROCESSOR_NAME, "Source=" + source + ", processorName="
+                + processorName + ", timeTakenMs=" + (timeTakenNs / 1_000_000.0));
     }
 
     private void downloadApkWithInternetRecord() {
