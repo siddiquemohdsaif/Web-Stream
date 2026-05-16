@@ -14,6 +14,7 @@ import java.nio.FloatBuffer;
 import javax.microedition.khronos.egl.EGLConfig;
 import javax.microedition.khronos.opengles.GL10;
 
+// depreciated use textureView
 public final class YuvFrameRenderer implements GLSurfaceView.Renderer {
 
     private final int frameWidth;

@@ -595,7 +595,8 @@ final class RemoteVideoTextureView extends TextureView implements TextureView.Su
 
             boolean planar =
                     colorFormat == MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Planar
-                            || colorFormat == MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420PackedPlanar;
+                            || colorFormat == MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420PackedPlanar
+                            || colorFormat == MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible; // now flexible we treat as planar
             int yPlaneSize = stride * sliceHeight;
             if (planar) {
                 copyPlanarChroma(raw, uPlane, vPlane, width, height, stride, yPlaneSize);
