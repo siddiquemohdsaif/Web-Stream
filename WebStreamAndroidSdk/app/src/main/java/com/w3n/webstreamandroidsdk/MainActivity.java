@@ -33,5 +33,9 @@ public class MainActivity extends AppCompatActivity {
         Button cameraRecordingGlViewButton = findViewById(R.id.cameraRecordingGlViewButton);
         cameraRecordingGlViewButton.setOnClickListener(v ->
                 startActivity(new Intent(MainActivity.this, CameraRecordingGLViewActivity.class)));
+
+        Button cameraRecordingDeltaViewButton = findViewById(R.id.cameraRecordingDeltaViewButton);
+        cameraRecordingDeltaViewButton.setOnClickListener(v ->
+                startActivity(new Intent(MainActivity.this, CameraRecordingDeltaViewActivity.class)));
     }
 }
