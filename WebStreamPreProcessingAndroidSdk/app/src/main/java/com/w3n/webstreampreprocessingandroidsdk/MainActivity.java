@@ -1,7 +1,8 @@
-package com.w3n.webstreamandroidsdk;
+package com.w3n.webstreampreprocessingandroidsdk;
 
 import android.content.Intent;
 import android.os.Bundle;
+import android.view.View;
 import android.widget.Button;
 
 import androidx.activity.EdgeToEdge;
@@ -11,6 +12,8 @@ import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 
 public class MainActivity extends AppCompatActivity {
+    private Button cameraImageSmootheningUsingNative;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -22,16 +25,13 @@ public class MainActivity extends AppCompatActivity {
             return insets;
         });
 
-        Button joinCallButton = findViewById(R.id.joinCallButton);
-        joinCallButton.setOnClickListener(v ->
-                startActivity(new Intent(MainActivity.this, JoinCallActivity.class)));
-
-        Button cameraRecordingButton = findViewById(R.id.cameraRecordingButton);
-        cameraRecordingButton.setOnClickListener(v ->
-                startActivity(new Intent(MainActivity.this, CameraRecordingActivity.class)));
-
-        Button cameraRecordingGlViewButton = findViewById(R.id.cameraRecordingGlViewButton);
-        cameraRecordingGlViewButton.setOnClickListener(v ->
-                startActivity(new Intent(MainActivity.this, CameraRecordingGLViewActivity.class)));
+        cameraImageSmootheningUsingNative = findViewById(R.id.cameraImageSmootheningUsingNative);
+        cameraImageSmootheningUsingNative.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                Intent intent = new Intent(MainActivity.this,CameraImageSmootheningUsingNativeActivity.class);
+                startActivity(intent);
+            }
+        });
     }
 }

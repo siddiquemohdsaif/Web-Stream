@@ -1,0 +1,24 @@
+<resources>
+    <string name="app_name">Test2WebStreamAndroidSdk</string>
+    <string name="convert_png_cpu">Convert PNG by CPU</string>
+    <string name="convert_png_gpu">Convert PNG by GPU</string>
+    <string name="convert_png_native_cpu">Convert PNG by Native CPU</string>
+    <string name="convert_png_vulkan_gpu">Convert PNG by Vulkan GPU</string>
+    <string name="convert_png_vulkan_gpu_1000">Convert PNG 1000 times in Vulkan GPU</string>
+    <string name="before">Before</string>
+    <string name="before_preview">Before preview image</string>
+    <string name="select_png_to_start">Choose CPU or GPU conversion, then select a PNG.</string>
+    <string name="select_png_for_native_cpu">Choose a PNG to run native CPU noise reduction.</string>
+    <string name="select_png_for_native_or_gpu">Choose Native CPU or Vulkan GPU conversion, then select a PNG.</string>
+    <string name="processing_image_noise_reduction">Processing image noise reduction...</string>
+    <string name="image_noise_reduction_saved">Saved output in Downloads/Test2WebStreamAndroidSdk/ImageNoiseReduction/%1$s</string>
+    <string name="image_noise_reduction_failed">Could not process selected PNG.</string>
+    <string name="edge_mask">Edge Mask</string>
+    <string name="edge_mask_preview">Edge mask preview image</string>
+    <string name="after">After</string>
+    <string name="after_preview">Noise reduced preview image</string>
+    <string name="vulkan_example_ready">Ready to run Vulkan vector addition.</string>
+    <string name="vulkan_example_running">Running Vulkan vector addition...</string>
+    <string name="vulkan_example_saved">Saved output in Downloads/Test2WebStreamAndroidSdk/VulkanExample/%1$s</string>
+    <string name="vulkan_example_failed">Vulkan vector addition failed.</string>
+</resources>

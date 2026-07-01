@@ -1,0 +1,229 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/main"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:padding="16dp"
+    tools:context=".CameraImageSmootheningUsingNativeActivity">
+
+    <SurfaceView
+        android:id="@+id/nativeCameraPreview"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        app:layout_constraintBottom_toTopOf="@+id/cameraSizeText"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <TextView
+        android:id="@+id/cameraSizeText"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="Native camera: not opened"
+        android:textSize="16sp"
+        app:layout_constraintBottom_toTopOf="@+id/resolutionControls"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/nativeCameraPreview" />
+
+    <LinearLayout
+        android:id="@+id/resolutionControls"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        app:layout_constraintBottom_toTopOf="@+id/openCameraButton"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/cameraSizeText">
+
+        <TextView
+            android:id="@+id/requiredResolutionLabel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Required resolution"
+            android:textSize="16sp" />
+
+        <Spinner
+            android:id="@+id/requiredResolutionSpinner"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_marginStart="12dp"
+            android:layout_weight="1" />
+    </LinearLayout>
+
+    <Button
+        android:id="@+id/openCameraButton"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:text="open Camera"
+        app:layout_constraintBottom_toTopOf="@+id/capturedYuvPreview"
+        app:layout_constraintEnd_toStartOf="@+id/flipCameraButton"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/resolutionControls" />
+
+    <Button
+        android:id="@+id/flipCameraButton"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="8dp"
+        android:layout_marginTop="12dp"
+        android:enabled="false"
+        android:text="Flip"
+        app:layout_constraintBottom_toTopOf="@+id/capturedYuvPreview"
+        app:layout_constraintEnd_toStartOf="@+id/clickButton"
+        app:layout_constraintStart_toEndOf="@+id/openCameraButton"
+        app:layout_constraintTop_toBottomOf="@+id/resolutionControls" />
+
+    <Button
+        android:id="@+id/clickButton"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="8dp"
+        android:layout_marginTop="12dp"
+        android:enabled="false"
+        android:text="Click"
+        app:layout_constraintBottom_toTopOf="@+id/capturedYuvPreview"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toEndOf="@+id/flipCameraButton"
+        app:layout_constraintTop_toBottomOf="@+id/resolutionControls" />
+
+    <ImageView
+        android:id="@+id/capturedYuvPreview"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:layout_marginTop="12dp"
+        android:background="#EEEEEE"
+        android:contentDescription="Clicked YUV preview"
+        android:scaleType="fitCenter"
+        android:visibility="gone"
+        app:layout_constraintBottom_toTopOf="@+id/smoothCpuButton"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/openCameraButton" />
+
+    <ScrollView
+        android:id="@+id/cpuResultScroll"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:clipToPadding="false"
+        android:paddingBottom="12dp"
+        android:visibility="gone"
+        app:layout_constraintBottom_toTopOf="@+id/backButton"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent">
+
+        <LinearLayout
+            android:id="@+id/cpuResultContainer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Before"
+                android:textSize="14sp" />
+
+            <ImageView
+                android:id="@+id/beforeImage"
+                android:layout_width="match_parent"
+                android:layout_height="260dp"
+                android:layout_marginTop="6dp"
+                android:background="#EEEEEE"
+                android:contentDescription="Before"
+                android:scaleType="fitCenter" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Edge Mask"
+                android:textSize="14sp" />
+
+            <ImageView
+                android:id="@+id/edgeMaskImage"
+                android:layout_width="match_parent"
+                android:layout_height="260dp"
+                android:layout_marginTop="6dp"
+                android:background="#EEEEEE"
+                android:contentDescription="Edge Mask"
+                android:scaleType="fitCenter" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="U Edge Mask"
+                android:textSize="14sp" />
+
+            <ImageView
+                android:id="@+id/uEdgeMaskImage"
+                android:layout_width="match_parent"
+                android:layout_height="260dp"
+                android:layout_marginTop="6dp"
+                android:background="#EEEEEE"
+                android:contentDescription="U Edge Mask"
+                android:scaleType="fitCenter" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="V Edge Mask"
+                android:textSize="14sp" />
+
+            <ImageView
+                android:id="@+id/vEdgeMaskImage"
+                android:layout_width="match_parent"
+                android:layout_height="260dp"
+                android:layout_marginTop="6dp"
+                android:background="#EEEEEE"
+                android:contentDescription="V Edge Mask"
+                android:scaleType="fitCenter" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:text="Noise Reduced Image"
+                android:textSize="14sp" />
+
+            <ImageView
+                android:id="@+id/noiseReducedImage"
+                android:layout_width="match_parent"
+                android:layout_height="260dp"
+                android:layout_marginTop="6dp"
+                android:background="#EEEEEE"
+                android:contentDescription="Noise Reduced Image"
+                android:scaleType="fitCenter" />
+        </LinearLayout>
+    </ScrollView>
+
+    <Button
+        android:id="@+id/smoothCpuButton"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:text="Image Smooth by Cpu"
+        android:visibility="gone"
+        app:layout_constraintBottom_toTopOf="@+id/backButton"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/capturedYuvPreview" />
+
+    <Button
+        android:id="@+id/backButton"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="12dp"
+        android:text="Back"
+        android:visibility="gone"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent" />
+
+</androidx.constraintlayout.widget.ConstraintLayout>

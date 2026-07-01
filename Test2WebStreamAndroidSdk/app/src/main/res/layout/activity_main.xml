@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:id="@+id/main"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    tools:context=".MainActivity">
+
+    <TextView
+        android:id="@+id/textView"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Test 2 webstream android sdk"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
+    <Button
+        android:id="@+id/cameraDelta"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Camera with Delta View"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/textView"
+        app:layout_constraintVertical_bias="0.084" />
+
+    <Button
+        android:id="@+id/imageNoiseReduction"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Image noise Reduction"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/cameraDelta"
+        app:layout_constraintVertical_bias="0.05" />
+
+    <Button
+        android:id="@+id/imageNoiseReductionNative"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Image noise Reduction Native"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/imageNoiseReduction"
+        app:layout_constraintVertical_bias="0.05" />
+
+    <Button
+        android:id="@+id/vulkanExample"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Vulkan Example"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/imageNoiseReductionNative"
+        app:layout_constraintVertical_bias="0.05" />
+
+    <Button
+        android:id="@+id/yuv420SupportTest"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="YUV 420 Support Test"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/vulkanExample"
+        app:layout_constraintVertical_bias="0.05" />
+
+</androidx.constraintlayout.widget.ConstraintLayout>
