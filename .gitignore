@@ -5,3 +5,23 @@ Test3WabStreamAndroidSdk
 TestWebStreamAndroidSdk.rar
 Test2WebStreamAndroidSdk.rar
 Test3WabStreamAndroidSdk.rar
+VulkanRendering
+CameraPipelineTest
+CameraPipelineTest.rar
+CameraPipelineTest_v2.rar
+CameraPipelineTest (1).rar
+CameraPipelineTest (1)
+
+# Gradle/Codex cache
+WebStreamVulkanTest/codex-gradle-home/
+
+# Android Studio generated files
+WebStreamVulkanTest/.idea/
+
+# Generated build files
+WebStreamVulkanTest/.gradle/
+WebStreamVulkanTest/**/build/
+WebStreamVulkanTest/**/.cxx/
+
+# Machine-specific Android SDK path
+WebStreamVulkanTest/local.properties

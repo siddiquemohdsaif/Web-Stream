@@ -1,8 +1,8 @@
-package com.w3n.webstreamvulkantest.Server;
+package com.w3n.webstreamvulkantest;
 
 import android.os.Handler;
 
-import com.w3n.webstreamvulkantest.Server.JpegWebSocketTransport;
+import com.w3n.webstreamvulkantest.JpegWebSocketTransport;
 
 public final class WebStreamCall {
     interface EndListener {
@@ -75,6 +75,11 @@ public final class WebStreamCall {
                     }
 
                     @Override
+                    public void onWaitingForPeer() {
+                        mainHandler.post(WebStreamCall.this::dispatchWaitingForPeer);
+                    }
+
+                    @Override
                     public void onJpegReceived(WebStreamJpegFrame frame) {
                         mainHandler.post(() -> dispatchJpegReceived(frame));
                     }
@@ -143,10 +148,14 @@ public final class WebStreamCall {
             return;
         }
         state = State.LEFT;
+        JpegWebSocketTransport closedTransport = transport;
+        transport = null;
         if (endListener != null) {
             endListener.onEnded(this);
         }
-        transport = null;
+        if (closedTransport != null) {
+            closedTransport.close();
+        }
         dispatchDisconnected();
     }
 
@@ -170,6 +179,12 @@ public final class WebStreamCall {
     private void dispatchConnecting() {
         if (listener != null) {
             mainHandler.post(listener::onConnecting);
+        }
+    }
+
+    private void dispatchWaitingForPeer() {
+        if (listener != null && state == State.CONNECTING) {
+            listener.onWaitingForPeer();
         }
     }
 

@@ -1,4 +1,4 @@
-package com.w3n.webstreamvulkantest.Server;
+package com.w3n.webstreamvulkantest;
 
 import android.content.Context;
 import android.graphics.Bitmap;

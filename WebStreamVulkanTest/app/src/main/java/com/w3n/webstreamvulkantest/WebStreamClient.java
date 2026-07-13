@@ -1,4 +1,4 @@
-package com.w3n.webstreamvulkantest.Server;
+package com.w3n.webstreamvulkantest;
 
 import android.content.Context;
 import android.os.Handler;
@@ -87,6 +87,9 @@ public final class WebStreamClient {
 
     public interface Listener {
         void onConnecting();
+
+        default void onWaitingForPeer() {
+        }
 
         void onConnected();
 

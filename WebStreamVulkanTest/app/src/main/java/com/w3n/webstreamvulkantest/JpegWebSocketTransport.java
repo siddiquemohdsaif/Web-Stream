@@ -26,6 +26,8 @@ final class JpegWebSocketTransport {
     interface Listener {
         void onConnected();
 
+        void onWaitingForPeer();
+
         void onJpegReceived(WebStreamJpegFrame frame);
 
         void onClosed();
@@ -51,6 +53,7 @@ final class JpegWebSocketTransport {
     private WebSocket webSocket;
     private boolean closed;
     private boolean joined;
+    private boolean peerConnected;
     private int cUuid;
 
     JpegWebSocketTransport(
@@ -112,7 +115,7 @@ final class JpegWebSocketTransport {
             int bitrateKbps,
             long timestampMs,
             long sequence) {
-        if (webSocket == null || closed || !joined || cUuid == 0
+        if (webSocket == null || closed || !joined || !peerConnected || cUuid == 0
                 || jpegData == null || jpegData.length == 0) {
             return;
         }
@@ -198,13 +201,23 @@ final class JpegWebSocketTransport {
                     participantIdsByCUuid.put(cUuid, userId);
                 }
                 rememberParticipantMappings(message.optJSONArray("participants"));
-                if (listener != null) {
-                    listener.onConnected();
-                }
+                updatePeerConnectionFromCurrentParticipants();
             } else if ("server.participant_joined".equals(type)) {
-                rememberParticipantMapping(message.optJSONObject("participant"));
+                JSONObject participant = message.optJSONObject("participant");
+                rememberParticipantMapping(participant);
+                if (isRemoteParticipant(participant)) {
+                    peerConnected = true;
+                    if (listener != null) {
+                        listener.onConnected();
+                    }
+                }
             } else if ("server.participant_left".equals(type)) {
-                removeParticipantMapping(message.optJSONObject("participant"));
+                JSONObject participant = message.optJSONObject("participant");
+                boolean remoteLeft = isRemoteParticipant(participant);
+                removeParticipantMapping(participant);
+                if (remoteLeft && listener != null) {
+                    listener.onClosed();
+                }
             } else if ("server.media.video".equals(type)) {
                 handleJsonJpegFrame(message);
             } else if ("server.left".equals(type) && listener != null) {
@@ -311,6 +324,24 @@ final class JpegWebSocketTransport {
         }
     }
 
+    private void updatePeerConnectionFromCurrentParticipants() {
+        peerConnected = false;
+        for (Integer participantCUuid : participantIdsByCUuid.keySet()) {
+            if (participantCUuid != null && participantCUuid != 0 && participantCUuid != cUuid) {
+                peerConnected = true;
+                break;
+            }
+        }
+        if (listener == null) {
+            return;
+        }
+        if (peerConnected) {
+            listener.onConnected();
+        } else {
+            listener.onWaitingForPeer();
+        }
+    }
+
     private void rememberParticipantMapping(JSONObject participant) {
         if (participant == null) {
             return;
@@ -322,8 +353,25 @@ final class JpegWebSocketTransport {
         }
     }
 
+    private boolean isRemoteParticipant(JSONObject participant) {
+        if (participant == null) {
+            return false;
+        }
+        int participantCUuid = participant.optInt("cUuid", 0);
+        if (participantCUuid != 0) {
+            return participantCUuid != cUuid;
+        }
+        String participantId = participant.optString("userId", null);
+        return !TextUtils.isEmpty(participantId) && !userId.equals(participantId);
+    }
+
     private void removeParticipantMapping(JSONObject participant) {
         if (participant == null) {
+            return;
+        }
+        int participantCUuid = participant.optInt("cUuid", 0);
+        if (participantCUuid != 0) {
+            participantIdsByCUuid.remove(participantCUuid);
             return;
         }
         String participantId = participant.optString("userId", null);

@@ -1,4 +1,4 @@
-package com.w3n.webstreamvulkantest.Server;
+package com.w3n.webstreamvulkantest;
 
 public final class WebStreamJpegFrame {
     private final String participantId;
